@@ -104,7 +104,7 @@ def run_agent(
     started = time.time()
     try:
         exited = adapter.wait(run["run_id"], timeout=timeout)
-        error = ""
+        error = str(exited.get("error", "") or "")
     except Exception as exc:  # noqa: BLE001
         exited = {"status": "failed", "exit_code": -1}
         error = str(exc)

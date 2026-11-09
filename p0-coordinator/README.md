@@ -90,7 +90,7 @@ p0-coordinator/
 cd p0-coordinator
 
 # 单元测试
-python -m unittest test_coordinator test_estimate test_plan_milp test_verifier test_v1_core test_v1_worktree test_v1_lifecycle test_v1_git_merge test_adapters test_or_router test_semantic -v
+python -m unittest test_coordinator test_estimate test_plan_milp test_verifier test_v1_core test_v1_worktree test_v1_lifecycle test_v1_git_merge test_adapters test_codex_appserver test_or_router test_semantic -v
 
 # 演示：W1 领 intro -> W2 冲突 -> 租约过期 -> W2 接管 -> W1 旧 token 被拒 -> 提交
 python demo.py
@@ -352,6 +352,16 @@ python -m unittest test_v1_core test_v1_worktree test_v1_lifecycle test_v1_evide
 - `webview2/`：WinForms + WebView2 + 现有 renderer + Python RPC；任务表 + Start Run + Candidates + Approve + Merge；`.\webview2\run.ps1 --smoke` 输出 `WEBVIEW2_SMOKE`。
 - `electron/smoke_cli.js`：Python CLI 桥冒烟通过；`smoke_min.js` 最小窗口在当前环境崩溃。
 - 真实 DSH e2e：`python ..\pilot\run_real_dsh.py`（需 key）；结果见 `pilot/REAL-DSH.md`。
+
+### 10.1 Codex App Server 协议与审批（P1-3）
+
+- 字段依据：本机 `codex-cli 0.164.0` 的 `app-server generate-json-schema`。`turn/completed` 为 `{threadId, turn{id,status,error,items}}`，`TurnStatus` 仅 `completed / interrupted / failed / inProgress`；`turn/start` 响应为 `{turn}`；`turn/interrupt` 参数为 `{threadId, turnId}`。
+- 状态：只有 `completed` 算成功；`failed` / `interrupted` 明确失败；`inProgress`、缺失或无法识别的状态记为 `unknown`；超时也是 `unknown`，不重发、不判成功。
+- 时序：通知先于 `turn/start` 应答到达也不会丢失；只接受当前 `threadId + turnId` 的完成事件，其他线程、旧轮次、迟到事件不改变结果。
+- 取消与退出：`stop()` 发送 `turn/interrupt` 并尽量确认终态；进程提前退出记为 `closed`，不会当作成功。
+- 服务端请求：带 id 的 method 与通知分开处理；审批请求默认拒绝（command/fileChange `decline`、legacy `denied`、permissions 空授权、MCP `decline`），未知请求返回 JSON-RPC `-32601`；可用 `approval_handler` 显式决定，但适配器绝不默认批准。
+- 配置：默认 `sandbox=workspace-write`、`approvalPolicy=on-request`、`approvalsReviewer=user`；旧版写死的 `danger-full-access` / `never` 已移除。`CODEX_APP_SERVER_SANDBOX` 可显式覆盖 sandbox（`read-only/workspace-write/danger-full-access`），审批策略不可关闭。兼容影响：需要工作区外写入或网络的任务现在会触发审批；没有 handler 时默认拒绝，任务会失败而不是静默绕过。
+- 测试：`test_codex_appserver.py` 配合离线桩 `codex_appserver_stub.py`，覆盖终态、早到、错配、迟到、超时、取消、进程退出、审批与未知请求；`test_adapters.py` 保留。
 
 ```powershell
 python adapter_cli.py probe

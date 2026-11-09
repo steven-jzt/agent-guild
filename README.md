@@ -100,7 +100,7 @@ AgentGuild-整合版-2026-11-09/
 cd p0-coordinator
 python -m unittest test_coordinator test_estimate test_plan_milp test_verifier `
   test_v1_core test_v1_worktree test_v1_lifecycle test_v1_git_merge `
-  test_adapters test_or_router test_semantic -q
+  test_adapters test_codex_appserver test_or_router test_semantic -q
 python smoke_cli.py
 python smoke_mcp.py
 ```

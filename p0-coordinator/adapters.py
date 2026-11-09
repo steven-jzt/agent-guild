@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import re
 import shlex
 import shutil
@@ -19,7 +18,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class AdapterError(RuntimeError):
@@ -264,15 +263,53 @@ class CodexExecAdapter(NdjsonAdapter):
 
 
 class _AppServerClient:
-    """Codex App Server 的 JSON-RPC over stdio 最小客户端。"""
+    """Codex App Server 的 JSON-RPC over stdio 客户端。
 
-    def __init__(self, proc: subprocess.Popen):
+    事件读取与请求等待分离：所有通知先落盘再匹配，因此完成通知早于
+    turn/start 应答也不会丢失。服务端请求（带 id 的 method）会立即按
+    审批策略响应，未知请求明确报错，不会悬挂或默认批准。
+
+    approval_handler 在读取线程中同步调用，必须快速返回；返回 None
+    表示使用 fail-closed 默认拒绝。
+    """
+
+    # 已知审批请求的 fail-closed 默认响应；不提供批准分支。
+    APPROVAL_DENIALS = {
+        "item/commandExecution/requestApproval": {"decision": "decline"},
+        "item/fileChange/requestApproval": {"decision": "decline"},
+        "item/permissions/requestApproval": {"permissions": {}},
+        "mcpServer/elicitation/request": {"action": "decline"},
+        "applyPatchApproval": {
+            "decision": {"denied": {"rejection": "agent-guild: approval not granted"}}
+        },
+        "execCommandApproval": {
+            "decision": {"denied": {"rejection": "agent-guild: approval not granted"}}
+        },
+    }
+
+    TERMINAL_TURN_STATUSES = ("completed", "failed", "interrupted")
+
+    def __init__(
+        self,
+        proc: subprocess.Popen,
+        approval_handler: Callable[[str, dict], dict | None] | None = None,
+    ):
         self.proc = proc
-        self.q: queue.Queue[dict | None] = queue.Queue()
+        self.approval_handler = approval_handler
         self.notifications: list[dict] = []
+        self.server_requests: list[dict] = []
+        self.turn_completions: list[dict] = []
+        self.malformed: list[dict] = []
+        self.late_responses: list[dict] = []
+        self._cond = threading.Condition()
         self._id = 0
+        self._pending: dict[int, dict | None] = {}
+        self._closed = False
+        self._failure: Exception | None = None
+        self._write_lock = threading.Lock()
         threading.Thread(target=self._read, daemon=True).start()
 
+    # ---------- 读取与分发 ----------
     def _read(self) -> None:
         assert self.proc.stdout is not None
         try:
@@ -281,67 +318,272 @@ class _AppServerClient:
                 if not line:
                     continue
                 try:
-                    self.q.put(json.loads(line))
+                    msg = json.loads(line)
                 except json.JSONDecodeError:
-                    self.q.put({"raw": line})
+                    with self._cond:
+                        self.malformed.append({"raw": line})
+                    continue
+                if not isinstance(msg, dict):
+                    with self._cond:
+                        self.malformed.append({"raw": line})
+                    continue
+                try:
+                    self._dispatch(msg)
+                except Exception as exc:  # noqa: BLE001 - 保持读取线程存活到 finally
+                    with self._cond:
+                        self._failure = exc
+                    break
         finally:
-            self.q.put(None)
-            self.proc.stdout.close()
+            with self._cond:
+                self._closed = True
+                self._cond.notify_all()
+            try:
+                self.proc.stdout.close()
+            except OSError:
+                pass
 
+    def _dispatch(self, msg: dict) -> None:
+        if "method" in msg:
+            if "id" in msg:
+                self._handle_server_request(msg)
+            else:
+                self._record_notification(msg)
+            return
+        # 响应：只按请求 ID 关联；超时后到达的响应不能完成新的请求。
+        with self._cond:
+            mid = msg.get("id")
+            if mid in self._pending and self._pending[mid] is None:
+                self._pending[mid] = msg
+            else:
+                self.late_responses.append(msg)
+            self._cond.notify_all()
+
+    def _record_notification(self, msg: dict) -> None:
+        with self._cond:
+            self.notifications.append(msg)
+            self._cond.notify_all()
+        method = msg.get("method")
+        if method == "turn/completed":
+            self._record_completion(msg)
+
+    def _record_completion(self, msg: dict) -> None:
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            with self._cond:
+                self.malformed.append(msg)
+            return
+        thread_id = params.get("threadId")
+        turn = params.get("turn")
+        if (
+            not isinstance(thread_id, str)
+            or not isinstance(turn, dict)
+            or not isinstance(turn.get("id"), str)
+        ):
+            with self._cond:
+                self.malformed.append(msg)
+            return
+        status = turn.get("status")
+        if status not in self.TERMINAL_TURN_STATUSES:
+            # turn/completed 携带 inProgress 或缺失状态属于不完整/未知结果。
+            status = "unknown"
+        error = ""
+        if isinstance(turn.get("error"), dict):
+            error = str(turn["error"].get("message", ""))
+        elif turn.get("error"):
+            error = str(turn["error"])
+        completion = {
+            "thread_id": thread_id,
+            "turn_id": turn["id"],
+            "status": status,
+            "error": error,
+            "raw": msg,
+        }
+        with self._cond:
+            self.turn_completions.append(completion)
+            self._cond.notify_all()
+
+    def observe_turn(self, thread_id: str, turn: object) -> None:
+        """把 turn/start 响应里的终态也当作结果（通常是 inProgress）。"""
+        if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+            return
+        if turn.get("status") not in self.TERMINAL_TURN_STATUSES:
+            return
+        self._record_completion({
+            "method": "turn/start.response",
+            "params": {"threadId": thread_id, "turn": turn},
+        })
+
+    # ---------- 服务端请求 ----------
+    def _handle_server_request(self, msg: dict) -> None:
+        method = msg.get("method")
+        mid = msg.get("id")
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        entry: dict = {
+            "id": mid, "method": method, "params": params,
+            "response": None, "error": None, "source": "",
+        }
+        decision = None
+        if self.approval_handler is not None:
+            try:
+                decision = self.approval_handler(method, params)
+            except Exception as exc:  # noqa: BLE001
+                self._send_error(mid, -32603, f"approval handler failed: {exc}")
+                entry["error"] = f"handler: {exc}"
+                entry["source"] = "handler-error"
+            else:
+                if decision is not None:
+                    entry["source"] = "handler"
+        if decision is None and entry["error"] is None:
+            if method in self.APPROVAL_DENIALS:
+                decision = dict(self.APPROVAL_DENIALS[method])
+                entry["source"] = "default-deny"
+            else:
+                self._send_error(mid, -32601, f"unsupported server request: {method}")
+                entry["error"] = "unsupported"
+                entry["source"] = "unsupported"
+        if decision is not None:
+            self._send_result(mid, decision)
+            entry["response"] = decision
+        with self._cond:
+            self.server_requests.append(entry)
+            self._cond.notify_all()
+
+    # ---------- 写入 ----------
+    def _send(self, frame: dict) -> None:
+        if self.proc.stdin is None:
+            raise AdapterError("app-server stdin is not available")
+        with self._write_lock:
+            try:
+                self.proc.stdin.write(json.dumps(frame) + "\n")
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                raise AdapterError(f"app-server stdin write failed: {exc}") from exc
+
+    def _send_result(self, mid: object, result: dict) -> None:
+        self._send({"jsonrpc": "2.0", "id": mid, "result": result})
+
+    def _send_error(self, mid: object, code: int, message: str) -> None:
+        self._send({"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}})
+
+    # ---------- 请求与等待 ----------
     def request(self, method: str, params: dict, timeout: float = 30) -> dict:
-        self._id += 1
-        req = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
-        assert self.proc.stdin is not None
-        self.proc.stdin.write(json.dumps(req) + "\n")
-        self.proc.stdin.flush()
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                msg = self.q.get(timeout=max(0.1, deadline - time.time()))
-            except queue.Empty:
-                break
-            if msg is None:
-                raise AdapterError(f"app-server closed during {method}")
-            if msg.get("id") == self._id:
-                if "error" in msg:
-                    raise AdapterError(f"app-server {method} failed: {msg['error']}")
-                return msg.get("result", {})
-            if "method" in msg:
-                self.notifications.append(msg)
-        raise AdapterError(f"app-server {method} timed out")
+        with self._cond:
+            if self._closed:
+                raise AdapterError(f"app-server closed before {method}")
+            self._id += 1
+            mid = self._id
+            self._pending[mid] = None
+        try:
+            self._send({"jsonrpc": "2.0", "id": mid, "method": method, "params": params})
+        except Exception:
+            with self._cond:
+                self._pending.pop(mid, None)
+            raise
 
-    def wait_turn(self, timeout: float = 180) -> bool:
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                msg = self.q.get(timeout=max(0.1, deadline - time.time()))
-            except queue.Empty:
-                break
-            if msg is None:
-                break
-            if "method" in msg:
-                self.notifications.append(msg)
-                if msg["method"] == "turn/completed":
-                    return True
-                if msg["method"] in ("turn/failed", "error"):
-                    return False
-        return False
+        with self._cond:
+            while True:
+                response = self._pending.get(mid)
+                if response is not None:
+                    self._pending.pop(mid, None)
+                    break
+                if self._closed:
+                    self._pending.pop(mid, None)
+                    raise AdapterError(f"app-server closed during {method}")
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    self._pending.pop(mid, None)
+                    raise AdapterError(
+                        f"app-server {method} timed out; execution state is unknown"
+                    )
+                self._cond.wait(min(remaining, 0.1))
+        if "error" in response:
+            raise AdapterError(f"app-server {method} failed: {response['error']}")
+        result = response.get("result", {})
+        return result if isinstance(result, dict) else {}
+
+    def wait_turn(self, thread_id: str, turn_id: str, timeout: float = 180) -> dict:
+        """等待指定 thread/turn 的终态；超时返回 unknown，不重发、不判成功。"""
+        deadline = time.time() + timeout
+        with self._cond:
+            while True:
+                for completion in self.turn_completions:
+                    if (
+                        completion["thread_id"] == thread_id
+                        and completion["turn_id"] == turn_id
+                    ):
+                        return {
+                            "status": completion["status"],
+                            "thread_id": thread_id,
+                            "turn_id": turn_id,
+                            "error": completion["error"],
+                            "reason": "completed",
+                        }
+                if self._closed:
+                    return {
+                        "status": "closed",
+                        "thread_id": thread_id,
+                        "turn_id": turn_id,
+                        "error": "app-server exited before turn completed",
+                        "reason": "closed",
+                    }
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return {
+                        "status": "unknown",
+                        "thread_id": thread_id,
+                        "turn_id": turn_id,
+                        "error": "turn did not complete before timeout; execution state is unknown",
+                        "reason": "timeout",
+                    }
+                self._cond.wait(min(remaining, 0.1))
+
+    def interrupt_turn(self, thread_id: str, turn_id: str, timeout: float = 5) -> bool:
+        try:
+            self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id}, timeout)
+            return True
+        except AdapterError:
+            return False
 
 
 class CodexAppServerAdapter(BaseAdapter):
-    """真实 Codex App Server：initialize → thread/start → turn/start。"""
+    """真实 Codex App Server：initialize → thread/start → turn/start。
+
+    默认使用 workspace-write + on-request，保留审批通道；不再写死
+    danger-full-access / approvalPolicy=never。sandbox 只允许通过
+    CODEX_APP_SERVER_SANDBOX 显式覆盖，审批策略始终为 on-request。
+    """
 
     name = "codex-appserver"
+    DEFAULT_SANDBOX = "workspace-write"
+    APPROVAL_POLICY = "on-request"
+    SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
 
-    def __init__(self, command: list[str] | None = None):
+    def __init__(
+        self,
+        command: list[str] | None = None,
+        approval_handler: Callable[[str, dict], dict | None] | None = None,
+        late_event_grace: float = 0.2,
+    ):
         raw = os.environ.get("CODEX_APP_SERVER_CMD", "").strip()
         cmd = command or (
             shlex.split(raw) if raw
             else ["codex", "app-server", "--listen", "stdio://"]
         )
         self.command = cmd
+        self.approval_handler = approval_handler
+        self.late_event_grace = max(0.0, float(late_event_grace))
         self._runs: dict[str, dict] = {}
         self._finished: dict[str, list[dict]] = {}
+        self._finished_server_requests: dict[str, list[dict]] = {}
+
+    def sandbox_mode(self) -> str:
+        value = os.environ.get("CODEX_APP_SERVER_SANDBOX", self.DEFAULT_SANDBOX).strip()
+        if value not in self.SANDBOX_MODES:
+            raise AdapterError(f"invalid CODEX_APP_SERVER_SANDBOX: {value}")
+        return value
 
     def probe(self) -> dict:
         candidate = Path(self.command[0])
@@ -359,7 +601,9 @@ class CodexAppServerAdapter(BaseAdapter):
                 if match:
                     auth = f"provider: {match.group(1)}"
         return {"name": self.name, "available": True, "executable": exe,
-                "command": self.command, "auth": auth, "transport": "stdio"}
+                "command": self.command, "auth": auth, "transport": "stdio",
+                "sandbox": os.environ.get("CODEX_APP_SERVER_SANDBOX", self.DEFAULT_SANDBOX),
+                "approval_policy": self.APPROVAL_POLICY}
 
     def start(self, task_id: str, workspace: str, env: dict | None = None,
               prompt: str | None = None) -> dict:
@@ -371,6 +615,7 @@ class CodexAppServerAdapter(BaseAdapter):
         cwd = Path(workspace).resolve()
         if not cwd.is_dir():
             raise AdapterError(f"workspace not found: {cwd}")
+        sandbox = self.sandbox_mode()
         merged_env = os.environ.copy()
         merged_env.update(env or {})
         proc = subprocess.Popen(
@@ -379,7 +624,7 @@ class CodexAppServerAdapter(BaseAdapter):
             text=True, encoding="utf-8", errors="replace",
             env=merged_env, cwd=str(cwd),
         )
-        client = _AppServerClient(proc)
+        client = _AppServerClient(proc, approval_handler=self.approval_handler)
         run_id = "AR-" + uuid.uuid4().hex[:8]
         try:
             client.request("initialize", {
@@ -387,30 +632,37 @@ class CodexAppServerAdapter(BaseAdapter):
             }, timeout=20)
             thread = client.request("thread/start", {
                 "cwd": str(cwd),
-                "sandbox": "danger-full-access",
-                "approvalPolicy": "never",
+                "sandbox": sandbox,
+                "approvalPolicy": self.APPROVAL_POLICY,
+                "approvalsReviewer": "user",
             }, timeout=30)
-            thread_id = thread["thread"]["id"]
+            thread_data = thread.get("thread")
+            if not isinstance(thread_data, dict) or not isinstance(thread_data.get("id"), str):
+                raise AdapterError("Codex app-server did not return a thread identity")
+            thread_id = thread_data["id"]
             turn = client.request("turn/start", {
                 "threadId": thread_id,
                 "cwd": str(cwd),
                 "input": [{"type": "text", "text": prompt}],
             }, timeout=30)
         except Exception:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _terminate_process(proc)
             raise
+        turn_data = turn.get("turn")
+        if not isinstance(turn_data, dict) or not isinstance(turn_data.get("id"), str):
+            _terminate_process(proc)
+            raise AdapterError("Codex app-server did not return a turn identity")
+        turn_id = turn_data["id"]
+        client.observe_turn(thread_id, turn_data)
         self._runs[run_id] = {
             "proc": proc, "client": client, "thread_id": thread_id,
-            "turn_id": (turn.get("turn") or {}).get("id"), "status": "running",
+            "turn_id": turn_id, "status": "running", "sandbox": sandbox,
         }
         return {
             "adapter": self.name, "run_id": run_id, "task_id": task_id,
             "workspace": str(cwd), "pid": proc.pid, "status": "running",
-            "thread_id": thread_id, "turn_id": self._runs[run_id]["turn_id"],
+            "thread_id": thread_id, "turn_id": turn_id,
+            "sandbox": sandbox, "approval_policy": self.APPROVAL_POLICY,
             "events": "jsonrpc",
         }
 
@@ -418,18 +670,35 @@ class CodexAppServerAdapter(BaseAdapter):
         item = self._runs.get(run_id)
         if item is None:
             raise AdapterError(f"unknown adapter run: {run_id}")
-        ok = item["client"].wait_turn(timeout)
+        client = item["client"]
+        turn_result = client.wait_turn(item["thread_id"], item["turn_id"], timeout)
+        if turn_result["status"] == "unknown":
+            # 超时后先尝试取消，并给迟到事件一个短暂窗口；结果仍保持 unknown。
+            client.interrupt_turn(item["thread_id"], item["turn_id"], timeout=2)
+            if self.late_event_grace:
+                time.sleep(self.late_event_grace)
         proc = item["proc"]
-        try:
-            proc.terminate()
-            code = proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            code = proc.wait(timeout=5)
-        item["status"] = "completed" if ok else "failed"
-        self._finished[run_id] = list(item["client"].notifications)
+        code = _terminate_process(proc)
+        item["status"] = turn_result["status"]
+        self._finished[run_id] = list(client.notifications)
+        self._finished_server_requests[run_id] = list(client.server_requests)
         self._runs.pop(run_id, None)
-        return {"run_id": run_id, "status": item["status"], "exit_code": 0 if ok else code}
+        status = turn_result["status"]
+        error = turn_result.get("error", "")
+        if status == "interrupted" and not error:
+            error = "turn interrupted"
+        if status == "unknown" and not error:
+            error = "turn reported an incomplete/unknown status"
+        return {
+            "run_id": run_id,
+            "status": status,
+            "exit_code": 0 if status == "completed" else (code if code else 1),
+            "thread_id": item["thread_id"],
+            "turn_id": item["turn_id"],
+            "error": error,
+            "sandbox": item.get("sandbox", self.DEFAULT_SANDBOX),
+            "approval_policy": self.APPROVAL_POLICY,
+        }
 
     def events(self, run_id: str) -> list[dict]:
         item = self._runs.get(run_id)
@@ -437,16 +706,55 @@ class CodexAppServerAdapter(BaseAdapter):
             return list(item["client"].notifications)
         return list(self._finished.get(run_id, []))
 
+    def server_requests(self, run_id: str) -> list[dict]:
+        item = self._runs.get(run_id)
+        if item is not None:
+            return list(item["client"].server_requests)
+        return list(self._finished_server_requests.get(run_id, []))
+
     def stop(self, run_id: str) -> dict:
         item = self._runs.pop(run_id, None)
         if item is None:
             raise AdapterError(f"unknown adapter run: {run_id}")
-        item["proc"].terminate()
+        client = item["client"]
+        confirmed = False
+        turn_status = None
+        if item["turn_id"]:
+            confirmed = client.interrupt_turn(item["thread_id"], item["turn_id"], timeout=5)
+            result = client.wait_turn(item["thread_id"], item["turn_id"], timeout=2)
+            turn_status = result["status"]
+            if turn_status in ("interrupted", "completed", "failed"):
+                confirmed = True
+        _terminate_process(item["proc"])
+        self._finished[run_id] = list(client.notifications)
+        self._finished_server_requests[run_id] = list(client.server_requests)
+        return {
+            "run_id": run_id,
+            "status": "stopped",
+            "turn_status": turn_status,
+            "confirmed": confirmed,
+        }
+
+
+def _terminate_process(proc: subprocess.Popen) -> int | None:
+    if proc.poll() is not None:
+        code = proc.returncode
+    else:
+        proc.terminate()
         try:
-            item["proc"].wait(timeout=5)
+            code = proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            item["proc"].kill()
-        return {"run_id": run_id, "status": "stopped"}
+            proc.kill()
+            try:
+                code = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                code = None
+    try:
+        if proc.stdin is not None and not proc.stdin.closed:
+            proc.stdin.close()
+    except (OSError, ValueError):
+        pass
+    return code
 
 
 class DshAdapter(NdjsonAdapter):
