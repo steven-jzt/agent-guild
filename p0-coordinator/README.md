@@ -359,6 +359,8 @@ python -m unittest test_v1_core test_v1_worktree test_v1_lifecycle test_v1_evide
 - 状态：只有 `completed` 算成功；`failed` / `interrupted` 明确失败；`inProgress`、缺失或无法识别的状态记为 `unknown`；超时也是 `unknown`，不重发、不判成功。
 - 时序：通知先于 `turn/start` 应答到达也不会丢失；只接受当前 `threadId + turnId` 的完成事件，其他线程、旧轮次、迟到事件不改变结果。
 - 取消与退出：`stop()` 发送 `turn/interrupt` 并尽量确认终态；进程提前退出记为 `closed`，不会当作成功。
+- 取消确认：`confirmed=true` 仅表示已观察到当前 thread/turn 的终态；中断请求的成功应答不算终态，等待结束仍为 `unknown` 时保持 `confirmed=false`，即使随后已清理本地进程。
+- 响应校验：请求 ID 只接受字符串或 int64 整数，拒绝布尔值、浮点数等；响应必须恰含 `result/error` 之一。本客户端使用的方法要求对象结果；错误必须含整数 `code` 和字符串 `message`。畸形响应明确报协议错误，不能默认为空结果。
 - 服务端请求：带 id 的 method 与通知分开处理；审批请求默认拒绝（command/fileChange `decline`、legacy `denied`、permissions 空授权、MCP `decline`），未知请求返回 JSON-RPC `-32601`；可用 `approval_handler` 显式决定，但适配器绝不默认批准。
 - 配置：默认 `sandbox=workspace-write`、`approvalPolicy=on-request`、`approvalsReviewer=user`；旧版写死的 `danger-full-access` / `never` 已移除。`CODEX_APP_SERVER_SANDBOX` 可显式覆盖 sandbox（`read-only/workspace-write/danger-full-access`），审批策略不可关闭。兼容影响：需要工作区外写入或网络的任务现在会触发审批；没有 handler 时默认拒绝，任务会失败而不是静默绕过。
 - 测试：`test_codex_appserver.py` 配合离线桩 `codex_appserver_stub.py`，覆盖终态、早到、错配、迟到、超时、取消、进程退出、审批与未知请求；`test_adapters.py` 保留。

@@ -79,6 +79,67 @@ class AppServerTest(unittest.TestCase):
                 return frame
         return None
 
+    def client_with_responses(self, responses: list[dict]) -> _AppServerClient:
+        source = (
+            "import sys,json\n"
+            "json.loads(sys.stdin.readline())\n"
+            f"frames=json.loads({json.dumps(responses)!r})\n"
+            "for frame in frames: print(json.dumps(frame), flush=True)\n"
+            "sys.stdin.read()\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-u", "-c", source],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8",
+        )
+
+        def cleanup():
+            if proc.poll() is None:
+                proc.terminate()
+            proc.wait(timeout=5)
+            proc.stdin.close()
+
+        self.addCleanup(cleanup)
+        return _AppServerClient(proc)
+
+    def test_invalid_response_ids_are_rejected_before_matching(self):
+        for mid in (True, False, None, [], {}, 1.0, 2**63):
+            with self.subTest(mid=mid):
+                client = self.client_with_responses([{"id": mid, "result": {}}])
+                with self.assertRaisesRegex(AdapterError, "Invalid JSON-RPC identity"):
+                    client.request("probe", {}, timeout=2)
+
+    def test_invalid_response_envelopes_are_rejected(self):
+        frames = [
+            {"id": 1},
+            {"id": 1, "result": {}, "error": {"code": -1, "message": "bad"}},
+            {"id": 1, "result": []},
+            {"id": 1, "error": None},
+            {"id": 1, "error": {"code": True, "message": "bad"}},
+            {"result": {}},
+        ]
+        for frame in frames:
+            with self.subTest(frame=frame):
+                client = self.client_with_responses([frame])
+                with self.assertRaisesRegex(AdapterError, "Invalid JSON-RPC response"):
+                    client.request("probe", {}, timeout=2)
+
+    def test_unmatched_valid_response_does_not_complete_current_request(self):
+        client = self.client_with_responses([
+            {"id": "1", "result": {"wrong": True}},
+            {"id": 99, "result": {"wrong": True}},
+            {"id": 1, "result": {"correct": True}},
+        ])
+        self.assertEqual(client.request("probe", {}, timeout=2), {"correct": True})
+        self.assertEqual(len(client.late_responses), 2)
+
+    def test_valid_rpc_error_is_preserved(self):
+        client = self.client_with_responses([
+            {"id": 1, "error": {"code": -32000, "message": "fixture rejection"}},
+        ])
+        with self.assertRaisesRegex(AdapterError, "fixture rejection"):
+            client.request("probe", {}, timeout=2)
+
     # ---------- 终态 ----------
     def test_completed_is_success(self):
         adapter, run = self.start("completed")
@@ -165,6 +226,13 @@ class AppServerTest(unittest.TestCase):
         self.assertEqual(stopped["status"], "stopped")
         self.assertEqual(stopped["turn_status"], "interrupted")
         self.assertTrue(stopped["confirmed"])
+        self.assertEqual(len(self.incoming("turn/interrupt")), 1)
+
+    def test_interrupt_ack_without_terminal_event_is_not_confirmed(self):
+        adapter, run = self.start("timeout")
+        stopped = adapter.stop(run["run_id"])
+        self.assertEqual(stopped["turn_status"], "unknown")
+        self.assertFalse(stopped["confirmed"])
         self.assertEqual(len(self.incoming("turn/interrupt")), 1)
 
     def test_process_exit_before_completion_is_closed(self):

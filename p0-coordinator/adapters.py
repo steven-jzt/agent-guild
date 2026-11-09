@@ -343,15 +343,32 @@ class _AppServerClient:
                 pass
 
     def _dispatch(self, msg: dict) -> None:
+        mid = msg.get("id")
+        # bool 是 Python int 的子类，必须排除，避免 true 匹配请求编号 1。
+        if "id" in msg and not (
+            isinstance(mid, str) or (type(mid) is int and -(2**63) <= mid < 2**63)
+        ):
+            raise AdapterError("Invalid JSON-RPC identity")
         if "method" in msg:
             if "id" in msg:
                 self._handle_server_request(msg)
             else:
                 self._record_notification(msg)
             return
+        if "id" not in msg or ("result" in msg) == ("error" in msg):
+            raise AdapterError("Invalid JSON-RPC response: expected identity and exactly one result/error")
+        if "error" in msg:
+            error = msg["error"]
+            if (
+                not isinstance(error, dict)
+                or type(error.get("code")) is not int
+                or not isinstance(error.get("message"), str)
+            ):
+                raise AdapterError("Invalid JSON-RPC response: invalid error object")
+        elif not isinstance(msg["result"], dict):
+            raise AdapterError("Invalid JSON-RPC response: expected an object result")
         # 响应：只按请求 ID 关联；超时后到达的响应不能完成新的请求。
         with self._cond:
-            mid = msg.get("id")
             if mid in self._pending and self._pending[mid] is None:
                 self._pending[mid] = msg
             else:
@@ -471,6 +488,8 @@ class _AppServerClient:
     def request(self, method: str, params: dict, timeout: float = 30) -> dict:
         with self._cond:
             if self._closed:
+                if self._failure is not None:
+                    raise AdapterError(str(self._failure)) from self._failure
                 raise AdapterError(f"app-server closed before {method}")
             self._id += 1
             mid = self._id
@@ -491,6 +510,8 @@ class _AppServerClient:
                     break
                 if self._closed:
                     self._pending.pop(mid, None)
+                    if self._failure is not None:
+                        raise AdapterError(str(self._failure)) from self._failure
                     raise AdapterError(f"app-server closed during {method}")
                 remaining = deadline - time.time()
                 if remaining <= 0:
@@ -501,8 +522,7 @@ class _AppServerClient:
                 self._cond.wait(min(remaining, 0.1))
         if "error" in response:
             raise AdapterError(f"app-server {method} failed: {response['error']}")
-        result = response.get("result", {})
-        return result if isinstance(result, dict) else {}
+        return response["result"]
 
     def wait_turn(self, thread_id: str, turn_id: str, timeout: float = 180) -> dict:
         """等待指定 thread/turn 的终态；超时返回 unknown，不重发、不判成功。"""
@@ -720,7 +740,8 @@ class CodexAppServerAdapter(BaseAdapter):
         confirmed = False
         turn_status = None
         if item["turn_id"]:
-            confirmed = client.interrupt_turn(item["thread_id"], item["turn_id"], timeout=5)
+            # 收到 interrupt 应答只表示请求已被接收，不能证明 turn 已结束。
+            client.interrupt_turn(item["thread_id"], item["turn_id"], timeout=5)
             result = client.wait_turn(item["thread_id"], item["turn_id"], timeout=2)
             turn_status = result["status"]
             if turn_status in ("interrupted", "completed", "failed"):
