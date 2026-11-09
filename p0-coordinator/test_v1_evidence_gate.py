@@ -21,6 +21,7 @@ import sys
 import types
 import unittest
 import uuid
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from coordinator import Coordinator, CoordinatorError
@@ -597,6 +598,199 @@ class LegacyDatabaseTest(unittest.TestCase):
                 db.unlink()
             except OSError:
                 pass
+
+
+OLD_APPROVALS_DDL = """
+CREATE TABLE candidate_approvals (
+    id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, approver TEXT NOT NULL,
+    role TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL,
+    UNIQUE(candidate_id, role)
+);
+"""
+
+NEW_APPROVALS_DDL = """
+CREATE TABLE candidate_approvals (
+    id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, batch_id TEXT,
+    approver TEXT NOT NULL, role TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL,
+    UNIQUE(candidate_id, batch_id, role)
+);
+"""
+
+
+class _InterruptApprovalCopy(Coordinator):
+    """让迁移中的 INSERT ... SELECT 失败，用于验证回滚（不改产品源码）。"""
+
+    @contextmanager
+    def _conn(self):
+        with super()._conn() as conn:
+            def authorize(action, first, second, database, trigger):
+                if action == sqlite3.SQLITE_INSERT and first == "candidate_approvals":
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            conn.set_authorizer(authorize)
+            yield conn
+
+
+class ApprovalMigrationTest(unittest.TestCase):
+    """candidate_approvals 重建：历史数据必须在 Coordinator 初始化之前写入。"""
+
+    def setUp(self):
+        TMP.mkdir(exist_ok=True)
+        self.db = TMP / f"approval-migration-{uuid.uuid4().hex}.db"
+
+    def tearDown(self):
+        try:
+            self.db.unlink()
+        except OSError:
+            pass
+
+    def seed_legacy(self, rows):
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.executescript(OLD_APPROVALS_DDL)
+            conn.executemany(
+                "INSERT INTO candidate_approvals"
+                "(id, candidate_id, approver, role, note, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                rows,
+            )
+            conn.commit()
+
+    def make_half_migrated(self, copied_ids):
+        """模拟一次中断：旧表已改名、新表已建、只复制了部分行。"""
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute(
+                "ALTER TABLE candidate_approvals RENAME TO candidate_approvals_legacy"
+            )
+            conn.executescript(NEW_APPROVALS_DDL)
+            if copied_ids:
+                placeholders = ",".join("?" for _ in copied_ids)
+                conn.execute(
+                    "INSERT INTO candidate_approvals"
+                    "(id, candidate_id, batch_id, approver, role, note, created_at) "
+                    "SELECT id, candidate_id, NULL, approver, role, note, created_at "
+                    "FROM candidate_approvals_legacy WHERE id IN (" + placeholders + ")",
+                    tuple(copied_ids),
+                )
+            conn.commit()
+
+    def tables(self):
+        with closing(sqlite3.connect(self.db)) as conn:
+            return {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+
+    def approval_columns(self):
+        with closing(sqlite3.connect(self.db)) as conn:
+            return {row[1] for row in conn.execute("PRAGMA table_info(candidate_approvals)")}
+
+    def approval_count(self):
+        with closing(sqlite3.connect(self.db)) as conn:
+            return conn.execute("SELECT COUNT(*) FROM candidate_approvals").fetchone()[0]
+
+    def test_normal_upgrade_and_restarts_preserve_seeded_rows(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "human-1", "reviewer", "keep-1", 1.0),
+            ("CA-2", "C-2", "human-2", "admin", "keep-2", 2.0),
+        ])
+        first = Coordinator(self.db)
+        approvals = first.list_candidate_approvals("C-1")
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0]["approver"], "human-1")
+        self.assertIsNone(approvals[0]["batch_id"])
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+        self.assertIn("batch_id", self.approval_columns())
+
+        # 重复启动幂等：不丢行、不重复迁移
+        Coordinator(self.db)
+        second = Coordinator(self.db)
+        self.assertEqual(self.approval_count(), 2)
+        self.assertEqual(len(second.list_candidate_approvals("C-2")), 1)
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+
+    def test_copy_failure_rolls_back_and_restart_recovers(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "human-1", "reviewer", "keep", 1.0),
+        ])
+        with self.assertRaises(sqlite3.DatabaseError):
+            _InterruptApprovalCopy(self.db)
+
+        # 回滚后仍是旧表，legacy 不存在，历史行原样保留
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+        self.assertNotIn("batch_id", self.approval_columns())
+        self.assertEqual(self.approval_count(), 1)
+
+        core = Coordinator(self.db)
+        approvals = core.list_candidate_approvals("C-1")
+        self.assertEqual(len(approvals), 1)
+        self.assertIsNone(approvals[0]["batch_id"])
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+
+        # 再次启动仍幂等
+        Coordinator(self.db)
+        self.assertEqual(self.approval_count(), 1)
+
+    def test_half_migrated_state_is_reconciled(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "human-1", "reviewer", "keep-1", 1.0),
+            ("CA-2", "C-2", "human-2", "admin", "keep-2", 2.0),
+        ])
+        self.make_half_migrated(["CA-1"])
+        self.assertEqual(self.approval_count(), 1)
+        self.assertIn("candidate_approvals_legacy", self.tables())
+
+        core = Coordinator(self.db)
+        self.assertEqual(self.approval_count(), 2)
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+        for candidate, approver in (("C-1", "human-1"), ("C-2", "human-2")):
+            approvals = core.list_candidate_approvals(candidate)
+            self.assertEqual(len(approvals), 1)
+            self.assertEqual(approvals[0]["approver"], approver)
+            self.assertIsNone(approvals[0]["batch_id"])
+
+        Coordinator(self.db)
+        self.assertEqual(self.approval_count(), 2)
+
+    def test_half_migrated_copy_failure_blocks_then_recovers(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "human-1", "reviewer", "keep", 1.0),
+        ])
+        self.make_half_migrated([])
+        with self.assertRaises(sqlite3.DatabaseError):
+            _InterruptApprovalCopy(self.db)
+        # 失败后 legacy 保留，可重试
+        self.assertIn("candidate_approvals_legacy", self.tables())
+        self.assertEqual(self.approval_count(), 0)
+
+        core = Coordinator(self.db)
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+        approvals = core.list_candidate_approvals("C-1")
+        self.assertEqual(len(approvals), 1)
+        self.assertIsNone(approvals[0]["batch_id"])
+
+    def test_ambiguous_half_migration_blocks_without_data_loss(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "human-1", "reviewer", "keep", 1.0),
+        ])
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute(
+                "ALTER TABLE candidate_approvals RENAME TO candidate_approvals_legacy"
+            )
+            conn.executescript(OLD_APPROVALS_DDL)
+            conn.commit()
+
+        with self.assertRaisesRegex(CoordinatorError, "ambiguous"):
+            Coordinator(self.db)
+        self.assertIn("candidate_approvals_legacy", self.tables())
+        self.assertEqual(self.approval_count(), 0)
+        with closing(sqlite3.connect(self.db)) as conn:
+            legacy_count = conn.execute(
+                "SELECT COUNT(*) FROM candidate_approvals_legacy"
+            ).fetchone()[0]
+        self.assertEqual(legacy_count, 1)
 
 
 def _import_mcp_server():

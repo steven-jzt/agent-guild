@@ -458,8 +458,10 @@ class Coordinator:
         self.db_path = str(db_path)
         self.default_ttl = float(default_ttl)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with self._conn() as conn:
+        with self._migration_conn() as conn:
+            # executescript() 会隐式提交并结束未完成事务，必须在 BEGIN 之前调用。
             conn.executescript(SCHEMA)
+            conn.execute("BEGIN IMMEDIATE")
             cols = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "kind" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'code'")
@@ -541,32 +543,100 @@ class Coordinator:
             )
             # 候选批准需要绑定验证批次；旧表的 UNIQUE(candidate_id, role) 会挡住
             # 新批次的同角色重新批准，必须重建表（历史行原样迁移，batch_id 为 NULL）。
-            apcols = {row["name"] for row in conn.execute("PRAGMA table_info(candidate_approvals)")}
-            if "batch_id" not in apcols:
-                conn.execute(
-                    "ALTER TABLE candidate_approvals RENAME TO candidate_approvals_legacy"
+            self._migrate_candidate_approvals(conn)
+
+    @contextmanager
+    def _migration_conn(self):
+        """初始化迁移专用连接：显式事务，失败回滚并保留原始异常类型。"""
+        with self._conn() as conn:
+            try:
+                yield conn
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+
+    @staticmethod
+    def _migrate_candidate_approvals(conn: sqlite3.Connection) -> None:
+        """把旧 candidate_approvals 迁移为按验证批次唯一。
+
+        全过程运行在调用方的显式事务里；失败由调用方回滚，历史行不会丢。
+        对上次迁移中断留下的 candidate_approvals_legacy 做补齐校验后再删除，
+        无法安全判定的状态明确报错，不静默跳过。
+        """
+        tables = {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(candidate_approvals)")
+        }
+        has_legacy = "candidate_approvals_legacy" in tables
+
+        if has_legacy:
+            if "batch_id" not in cols:
+                raise CoordinatorError(
+                    "candidate_approvals migration state is ambiguous: both "
+                    "candidate_approvals_legacy and an old-schema candidate_approvals exist; "
+                    "inspect the database before retrying"
                 )
-                conn.execute(
-                    "CREATE TABLE candidate_approvals ("
-                    "id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, batch_id TEXT, "
-                    "approver TEXT NOT NULL, role TEXT NOT NULL, "
-                    "note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, "
-                    "UNIQUE(candidate_id, batch_id, role))"
-                )
-                conn.execute(
-                    "INSERT INTO candidate_approvals(id, candidate_id, batch_id, approver, role, note, created_at) "
-                    "SELECT id, candidate_id, NULL, approver, role, note, created_at "
-                    "FROM candidate_approvals_legacy"
-                )
-                conn.execute("DROP TABLE candidate_approvals_legacy")
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_candidate_approvals "
-                    "ON candidate_approvals(candidate_id, created_at)"
-                )
+            # 补齐上次中断时未复制完的历史行（按主键幂等）。
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_candidate_approvals_batch "
-                "ON candidate_approvals(batch_id, candidate_id)"
+                "INSERT OR IGNORE INTO candidate_approvals"
+                "(id, candidate_id, batch_id, approver, role, note, created_at) "
+                "SELECT id, candidate_id, NULL, approver, role, note, created_at "
+                "FROM candidate_approvals_legacy"
             )
+            missing = conn.execute(
+                "SELECT COUNT(*) AS n FROM candidate_approvals_legacy l "
+                "WHERE NOT EXISTS (SELECT 1 FROM candidate_approvals n WHERE n.id=l.id)"
+            ).fetchone()["n"]
+            if missing:
+                raise CoordinatorError(
+                    "candidate_approvals migration incomplete: "
+                    f"{missing} legacy row(s) missing from the target table"
+                )
+            conn.execute("DROP TABLE candidate_approvals_legacy")
+        elif "batch_id" not in cols:
+            conn.execute(
+                "ALTER TABLE candidate_approvals RENAME TO candidate_approvals_legacy"
+            )
+            conn.execute(
+                "CREATE TABLE candidate_approvals ("
+                "id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, batch_id TEXT, "
+                "approver TEXT NOT NULL, role TEXT NOT NULL, "
+                "note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, "
+                "UNIQUE(candidate_id, batch_id, role))"
+            )
+            conn.execute(
+                "INSERT INTO candidate_approvals"
+                "(id, candidate_id, batch_id, approver, role, note, created_at) "
+                "SELECT id, candidate_id, NULL, approver, role, note, created_at "
+                "FROM candidate_approvals_legacy"
+            )
+            missing = conn.execute(
+                "SELECT COUNT(*) AS n FROM candidate_approvals_legacy l "
+                "WHERE NOT EXISTS (SELECT 1 FROM candidate_approvals n WHERE n.id=l.id)"
+            ).fetchone()["n"]
+            if missing:
+                raise CoordinatorError(
+                    "candidate_approvals migration incomplete: "
+                    f"{missing} legacy row(s) missing from the target table"
+                )
+            conn.execute("DROP TABLE candidate_approvals_legacy")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_candidate_approvals "
+            "ON candidate_approvals(candidate_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_candidate_approvals_batch "
+            "ON candidate_approvals(batch_id, candidate_id)"
+        )
 
     # ---------- 基础设施 ----------
     @contextmanager
