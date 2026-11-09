@@ -59,7 +59,10 @@ TOOLS = [
                 "priority": {"type": "integer"},
                 "kind": {"type": "string"},
                 "checks": {"type": "array", "items": {"type": "object"}},
-                "required_checks": {"type": "array", "items": {"type": "object"}},
+                "required_checks": {
+                    "type": "array", "items": {"type": "object"},
+                    "description": "任务追加检查项；不能删除或弱化项目必需项",
+                },
                 "repo_id": {"type": "string"},
             },
             "required": ["project_id", "title"],

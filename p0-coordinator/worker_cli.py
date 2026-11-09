@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dod", default="")
     p.add_argument("--description", default="")
     p.add_argument("--checks", help="JSON array: [{\"type\":\"file_exists\",\"path\":\"...\"}]")
-    p.add_argument("--required-checks", help="JSON array，覆盖项目必需检查项")
+    p.add_argument("--required-checks", help="JSON array，任务追加检查项（不能删除项目必需项）")
     p.add_argument("--repo-id", default="")
 
     p = sub.add_parser("claim", help="领取任务")

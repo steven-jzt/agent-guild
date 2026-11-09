@@ -320,11 +320,14 @@ python live-demo\verify.py
 
 ### 9.1 Candidate 证据门禁（P1-1，2026-11-09）
 
-- **必需项**：项目级 `required_checks`，默认 `platform-test(test)` + `agent-review(review)`；任务可用 `required_checks` 覆盖，但任何配置都必须至少含一项 `test` 和一项 `review`，不能退化成“只要测试成功”。
-- **验证批次**：`freeze_candidate` 自动开启批次，固化 candidate SHA、base SHA、必需项快照与 config hash；`begin_validation_batch` 可重开，旧批次标记 superseded，其证据不再参与判定。
+- **必需项**：项目级 `required_checks`，默认 `platform-test(test)` + `agent-review(review)`，项目配置必须至少含一项 `test` 和一项 `review`；任务的 `required_checks` 只作为**追加项**，项目必需项始终保留，项目后续新增项也自动生效（任务不能删项或改 kind）。
+- **类别规范**：证据的 `type` 必须与检查项 `kind` 一致（test/review/check）；普通测试记录不能冒充 Agent 审查。写入校验与门禁都会检查；`agent_runner` 给平台测试写 `type=test`。
+- **验证批次**：`freeze_candidate` 自动开启批次，固化 candidate SHA、base SHA、必需项快照与 config hash；`begin_validation_batch` 可重开，旧批次标记 superseded，其证据与人工批准都不再参与新批次判定。
 - **证据**：门禁证据必须带 `check_id`、绑定当前 candidate SHA、落在打开的批次内；`seq` 为批次内递增序号，判定取每个必需项最新一条（同一时间戳也按 `seq` 排序，不依赖时间）。
-- **判定**：缺失、失败（`exit_code != 0`）、错误 SHA、旧批次、必需项配置变化、批次基线变化，全部阻止；`mark_candidate_ready` 与 `approve_candidate` 共用同一门禁；进入 `awaiting_human` 之后新增有效失败结果会让后续批准再次被拒绝。
-- **迁移**：只新增列/表，不删除历史；旧证据没有 batch/check_id，保留但**不能**被视为通过；旧候选需 `begin_validation_batch` 后重新记录。
+- **作废语义**：`void_evidence` 只作废单条记录；如果被作废的是该检查项的最新结果，则该项进入等待重新验证状态，**不会**回退到更早的成功记录，必须记录新的有效结果才能恢复。
+- **判定**：缺失、失败（`exit_code != 0`）、错误 SHA、类别不匹配、最新结果作废、旧批次、必需项配置变化、批次基线变化，全部阻止；`mark_candidate_ready` 与 `approve_candidate` 共用同一门禁；进入 `awaiting_human` 之后新增有效失败结果会让后续批准再次被拒绝。
+- **审批批次**：`candidate_approvals` 绑定验证批次；新批次必须重新完成整条审批链，旧批次的部分批准只保留审计历史、不再计数。
+- **迁移**：旧库只新增列/表并把 `candidate_approvals` 重建为带 `batch_id` 的结构；历史证据与批准不删除，但旧证据（无 batch/check_id）和旧批准（batch_id 为 NULL）都不能满足新批次，旧候选需 `begin_validation_batch` 后重新记录与审批。
 - **CLI**：`create-project` / `create-task` 的 `--required-checks`，`record-evidence --check-id [--batch]`，另有 `begin-validation-batch`、`validation-batches`、`candidate-gate`；MCP 暴露同名工具。
 - **尚未支持**：真实 Agent 审查生产者。现有 demo/pilot 没有真实 review 证据时，会在 `mark_candidate_ready` 停止并报 `missing=agent-review`；这是预期行为，不要补假 review。
 

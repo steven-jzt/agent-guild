@@ -76,12 +76,14 @@ def run_agent(
                 check_source = "task"
                 break
 
-    # 平台测试证据必须绑定明确的必需检查项 ID（默认第一项 kind=test）。
+    # 平台测试证据必须绑定明确的必需检查项 ID，且类别与 kind 一致（test）。
     platform_check_id = "platform-test"
+    platform_check_kind = "test"
     try:
         for item in coord.required_checks_for_task(task_id):
             if item.get("kind") == "test":
                 platform_check_id = item["id"]
+                platform_check_kind = item["kind"]
                 break
     except CoordinatorError:
         pass
@@ -176,7 +178,7 @@ def run_agent(
             check_output = f"{type(exc).__name__}: {exc}"
             check_error = check_output
         coord.record_evidence(
-            cand["candidate_id"], "check", command=check, cwd=ws["path"],
+            cand["candidate_id"], platform_check_kind, command=check, cwd=ws["path"],
             exit_code=check_exit, output_ref="inline", sha=head,
             execution_id=execution["execution_id"],
             check_id=platform_check_id,

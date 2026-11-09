@@ -203,6 +203,58 @@ class EvidenceGateTest(unittest.TestCase):
         with self.assertRaisesRegex(CoordinatorError, "platform-test"):
             self.c.mark_candidate_ready(self.cid)
 
+    # ---------- 类别规范（R1） ----------
+    def test_test_evidence_cannot_satisfy_agent_review(self):
+        self.ev(TEST_ID, 0)
+        with self.assertRaisesRegex(CoordinatorError, "kind|type"):
+            self.ev(REVIEW_ID, 0, type_="test")
+        self.assertFalse(self.c.evaluate_candidate_gate(self.cid)["ok"])
+
+        # 直接写库模拟绕过写入校验的历史/脏数据：门禁也必须拒绝
+        batch = self.c.get_candidate(self.cid)["active_batch_id"]
+        with self.c._tx() as conn:
+            conn.execute(
+                "INSERT INTO evidence(id, candidate_id, batch_id, check_id, seq, type, "
+                "command, cwd, exit_code, output_ref, sha, status, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("EV-wrongkind", self.cid, batch, REVIEW_ID, 100, "test", "", "",
+                 0, "", SHA, "valid", 1.0),
+            )
+            conn.execute("UPDATE validation_batches SET next_seq=100 WHERE id=?", (batch,))
+        gate = self.c.evaluate_candidate_gate(self.cid)
+        self.assertFalse(gate["ok"])
+        self.assertIn(REVIEW_ID, gate["invalid"])
+
+        # 正确类别的新结果可以恢复
+        self.ev(REVIEW_ID, 0, type_="review")
+        self.assertTrue(self.c.evaluate_candidate_gate(self.cid)["ok"])
+        self.assertEqual(self.c.mark_candidate_ready(self.cid)["status"], "awaiting_human")
+
+    # ---------- 作废最新结果（R2） ----------
+    def test_void_latest_failure_requires_revalidation(self):
+        self.pass_both()
+        failure = self.ev(REVIEW_ID, 1, type_="review")
+        self.assertFalse(self.c.evaluate_candidate_gate(self.cid)["ok"])
+
+        voided = self.c.void_evidence(failure["evidence_id"], "needs revalidation")
+        self.assertEqual(voided["status"], "void")
+        gate = self.c.evaluate_candidate_gate(self.cid)
+        self.assertFalse(gate["ok"], "作废最新失败后不能回退到更早的成功")
+        self.assertIn(REVIEW_ID, gate["invalid"])
+
+        # 新的有效结果通过后才恢复
+        self.ev(REVIEW_ID, 0, type_="review")
+        self.assertTrue(self.c.evaluate_candidate_gate(self.cid)["ok"])
+        self.assertEqual(self.c.mark_candidate_ready(self.cid)["status"], "awaiting_human")
+
+    def test_void_latest_success_also_requires_revalidation(self):
+        self.pass_both()
+        latest = [e for e in self.c.list_evidence(self.cid) if e["check_id"] == REVIEW_ID][-1]
+        self.c.void_evidence(latest["evidence_id"], "suspect result")
+        self.assertFalse(self.c.evaluate_candidate_gate(self.cid)["ok"])
+        self.ev(REVIEW_ID, 0, type_="review")
+        self.assertTrue(self.c.evaluate_candidate_gate(self.cid)["ok"])
+
     def test_extra_non_required_evidence_allowed_but_not_substitutable(self):
         self.pass_both()
         self.ev("lint", 1, type_="check")
@@ -274,13 +326,68 @@ class EvidenceGateTest(unittest.TestCase):
         self.c.record_evidence(cid, "review", check_id=REVIEW_ID, sha=SHA, exit_code=0)
         with self.assertRaisesRegex(CoordinatorError, "integration-test"):
             self.c.mark_candidate_ready(cid)
+        self.c.record_evidence(cid, "test", check_id="integration-test", sha=SHA, exit_code=0)
+        self.assertEqual(self.c.mark_candidate_ready(cid)["status"], "awaiting_human")
 
-    def test_task_override_cannot_drop_review(self):
-        with self.assertRaisesRegex(CoordinatorError, "review"):
+    def test_task_additions_keep_project_required_review(self):
+        project = self.c.create_project("strict-project", required_checks=[
+            {"id": TEST_ID, "kind": "test"},
+            {"id": "integration-test", "kind": "test"},
+            {"id": REVIEW_ID, "kind": "review"},
+        ])
+        task = self.c.create_task(
+            project["project_id"], "task additions", ["src/b.py"], repo_id="repo1",
+            required_checks=[{"id": "lint", "kind": "check"}],
+        )
+        ids = [item["id"] for item in self.c.required_checks_for_task(task["id"])]
+        self.assertEqual(set(ids), {TEST_ID, "integration-test", REVIEW_ID, "lint"})
+
+    def test_task_addition_cannot_change_project_kind(self):
+        with self.assertRaises(CoordinatorError):
             self.c.create_task(
-                self.p["project_id"], "no review", ["src/b.py"], repo_id="repo1",
-                required_checks=[{"id": TEST_ID, "kind": "test"}],
+                self.p["project_id"], "kind conflict", ["src/b.py"], repo_id="repo1",
+                required_checks=[{"id": TEST_ID, "kind": "review"}],
             )
+
+    def test_project_addition_applies_to_existing_task(self):
+        task = self.c.create_task(
+            self.p["project_id"], "existing", ["src/b.py"], repo_id="repo1"
+        )
+        self.c.set_required_checks(self.p["project_id"], [
+            {"id": TEST_ID, "kind": "test"},
+            {"id": "integration-test", "kind": "test"},
+            {"id": REVIEW_ID, "kind": "review"},
+        ])
+        ids = [item["id"] for item in self.c.required_checks_for_task(task["id"])]
+        self.assertIn("integration-test", ids)
+
+    def test_task_configuration_cannot_remove_project_check(self):
+        project = self.c.create_project("policy", required_checks=[
+            {"id": TEST_ID, "kind": "test"},
+            {"id": "integration-test", "kind": "test"},
+            {"id": REVIEW_ID, "kind": "review"},
+        ])
+        task = self.c.create_task(
+            project["project_id"], "weaker task", ["src/b.py"], repo_id="repo1",
+            required_checks=[
+                {"id": TEST_ID, "kind": "test"},
+                {"id": REVIEW_ID, "kind": "review"},
+            ],
+        )
+        ids = [item["id"] for item in self.c.required_checks_for_task(task["id"])]
+        self.assertIn("integration-test", ids)
+
+        execution = self.c.start_execution(task["id"], "agent-a")
+        self.c.finish_execution(execution["execution_id"], "succeeded", "done")
+        cand = self.c.create_candidate(
+            task["id"], "repo1", BASE, SHA, author_execution_id=execution["execution_id"]
+        )
+        cid = cand["candidate_id"]
+        self.c.freeze_candidate(cid)
+        self.c.record_evidence(cid, "test", check_id=TEST_ID, sha=SHA, exit_code=0)
+        self.c.record_evidence(cid, "review", check_id=REVIEW_ID, sha=SHA, exit_code=0)
+        with self.assertRaisesRegex(CoordinatorError, "integration-test"):
+            self.c.mark_candidate_ready(cid)
 
     def test_config_change_after_awaiting_blocks_approve(self):
         self.pass_both()
@@ -297,6 +404,54 @@ class EvidenceGateTest(unittest.TestCase):
         self.ev("integration-test", 0)
         self.ev(REVIEW_ID, 0, type_="review")
         self.assertEqual(self.c.approve_candidate(self.cid, "alice")["status"], "approved")
+
+    def test_new_batch_requires_fresh_approval_chain(self):
+        project = self.c.create_project("chain-batch", approval_chain="reviewer,admin")
+        task = self.c.create_task(project["project_id"], "chain", ["src/c.py"], repo_id="repo1")
+        execution = self.c.start_execution(task["id"], "agent-a")
+        self.c.finish_execution(execution["execution_id"], "succeeded", "done")
+        cand = self.c.create_candidate(
+            task["id"], "repo1", BASE, SHA, author_execution_id=execution["execution_id"]
+        )
+        cid = cand["candidate_id"]
+        self.c.freeze_candidate(cid)
+        self.c.record_evidence(cid, "test", check_id=TEST_ID, sha=SHA, exit_code=0)
+        self.c.record_evidence(cid, "review", check_id=REVIEW_ID, sha=SHA, exit_code=0)
+        self.c.mark_candidate_ready(cid)
+
+        first = self.c.approve_candidate(cid, "reviewer-1", role="reviewer")
+        self.assertEqual(first["status"], "awaiting_human")
+        self.assertEqual(first["pending_roles"], ["admin"])
+        old_batch = self.c.get_candidate(cid)["active_batch_id"]
+
+        self.c.set_required_checks(project["project_id"], [
+            {"id": TEST_ID, "kind": "test"},
+            {"id": "integration-test", "kind": "test"},
+            {"id": REVIEW_ID, "kind": "review"},
+        ])
+        self.c.begin_validation_batch(cid, "config changed")
+        new_batch = self.c.get_candidate(cid)["active_batch_id"]
+        self.assertNotEqual(old_batch, new_batch)
+        self.c.record_evidence(cid, "test", check_id=TEST_ID, sha=SHA, exit_code=0)
+        self.c.record_evidence(cid, "review", check_id=REVIEW_ID, sha=SHA, exit_code=0)
+        self.c.record_evidence(cid, "test", check_id="integration-test", sha=SHA, exit_code=0)
+
+        # 旧批次的 reviewer 批准不能补齐新批次审批链
+        with self.assertRaisesRegex(CoordinatorError, "next approval role is reviewer"):
+            self.c.approve_candidate(cid, "admin-1", role="admin")
+        self.assertNotEqual(self.c.get_candidate(cid)["status"], "approved")
+
+        second = self.c.approve_candidate(cid, "reviewer-2", role="reviewer")
+        self.assertEqual(second["status"], "awaiting_human")
+        self.assertEqual(second["pending_roles"], ["admin"])
+        third = self.c.approve_candidate(cid, "admin-2", role="admin")
+        self.assertEqual(third["status"], "approved")
+
+        approvals = self.c.list_candidate_approvals(cid)
+        self.assertEqual(len(approvals), 3)
+        reviewer_batches = {a["batch_id"] for a in approvals if a["role"] == "reviewer"}
+        self.assertEqual(reviewer_batches, {old_batch, new_batch})
+        self.assertIn(new_batch, {a["batch_id"] for a in approvals if a["role"] == "admin"})
 
     def test_invalid_required_checks_rejected(self):
         with self.assertRaises(CoordinatorError):
@@ -369,6 +524,11 @@ class LegacyDatabaseTest(unittest.TestCase):
         cwd TEXT NOT NULL DEFAULT '', exit_code INTEGER,
         output_ref TEXT NOT NULL DEFAULT '', sha TEXT, created_at REAL NOT NULL
     );
+    CREATE TABLE candidate_approvals (
+        id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, approver TEXT NOT NULL,
+        role TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL,
+        UNIQUE(candidate_id, role)
+    );
     """
 
     def test_legacy_evidence_is_preserved_but_not_authoritative(self):
@@ -396,10 +556,18 @@ class LegacyDatabaseTest(unittest.TestCase):
                     "output_ref, sha, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                     ("EV-legacy", "C-legacy", "test", "pytest", "", 0, "", SHA, 1.0),
                 )
-            # 迁移后：历史证据仍在，但没有批次/检查项，不能算通过
+                tx.execute(
+                    "INSERT INTO candidate_approvals(id, candidate_id, approver, role, note, created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    ("CA-legacy", "C-legacy", "old-reviewer", "reviewer", "old batch", 1.0),
+                )
+            # 迁移后：历史证据/批准仍在，但没有批次/检查项，不能算通过
             with c._conn() as tx:
                 rows = tx.execute("SELECT * FROM evidence").fetchall()
+                approvals = tx.execute("SELECT * FROM candidate_approvals").fetchall()
             self.assertEqual(len(rows), 1)
+            self.assertEqual(len(approvals), 1)
+            self.assertIsNone(approvals[0]["batch_id"])
             gate = c.evaluate_candidate_gate("C-legacy")
             self.assertFalse(gate["ok"])
             self.assertIsNone(gate["batch_id"])
@@ -412,10 +580,18 @@ class LegacyDatabaseTest(unittest.TestCase):
             execution = c.start_execution(t["id"], "agent-a")
             c.finish_execution(execution["execution_id"], "succeeded", "done")
             self.assertEqual(c.mark_candidate_ready("C-legacy")["status"], "awaiting_human")
+            c.approve_candidate("C-legacy", "new-reviewer")
             with c._conn() as tx:
                 self.assertEqual(
                     tx.execute("SELECT COUNT(*) FROM evidence").fetchone()[0], 3
                 )
+                all_approvals = tx.execute(
+                    "SELECT * FROM candidate_approvals ORDER BY created_at"
+                ).fetchall()
+            # 旧批准保留但 batch_id 为 NULL；新批准绑定当前批次
+            self.assertEqual(len(all_approvals), 2)
+            self.assertIsNone(all_approvals[0]["batch_id"])
+            self.assertIsNotNone(all_approvals[1]["batch_id"])
         finally:
             try:
                 db.unlink()
