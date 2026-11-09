@@ -26,6 +26,8 @@ npm run typecheck
 
 当前机器已经安装依赖，不需要重复安装。要求 Node.js ≥24.9、Git；本轮验证使用 Windows x64。Windows 进程管理助手首次运行时使用系统 .NET Framework 的 `csc.exe` 编译，缓存到本机 AppData 的 `AgentGuild/bin`。
 
+测试夹具 `test/fixtures/rpc-server.mjs` 会先发 `fixture/ready` 通知；`test/rpc-process.test.ts` 等到就绪后才开始请求计时。启动等待（默认 5s）与单个请求期限（畸形响应 500ms、`stall` 100ms）分开，测试包含延迟启动与就绪超时用例。`npm run typecheck` 需要 `typescript`/`@types/node` 开发依赖；未安装时只能运行 `node --experimental-strip-types --test`，不能把去掉类型的运行当成类型检查。
+
 真实模型实验可能消耗账号额度，运行一次会创建一个新的实验目录：
 
 | 命令 | 验证内容 | 当前结果 |
