@@ -1,0 +1,13 @@
+{
+  "name": "p0-coordinator",
+  "version": "1.0.0",
+  "description": "SQLite + MCP + CLI 的协调器：任务卡、写集、依赖、原子 claim、TTL 租约、fencing token、事件日志；外加 runs 遥测、估计器、MILP 2D/3D Pareto、独立验证、N-of-M 审批（TTL）、预算止损、计划回写/预留。",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

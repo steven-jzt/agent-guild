@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline';" />
+<title>Agent Guild 控制台</title>
+<style>
+  :root {
+    --bg: #f2f5fa; --panel: #ffffff; --ink: #0f172a; --muted: #64748b;
+    --line: #e2e8f0; --blue: #2563eb; --green: #059669; --amber: #d97706;
+    --violet: #7c3aed; --red: #dc2626; --cyan: #0891b2;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+  }
+  .app { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+  .sidebar {
+    background: linear-gradient(180deg, #0b1424 0%, #101d33 100%);
+    color: #dbe7f5; padding: 22px 16px; display: flex; flex-direction: column; gap: 22px;
+  }
+  .brand { display: flex; gap: 10px; align-items: center; }
+  .logo {
+    width: 38px; height: 38px; border-radius: 11px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    display: grid; place-items: center; font-weight: 800; color: #fff; letter-spacing: .5px;
+    box-shadow: 0 6px 16px rgba(59,130,246,.35);
+  }
+  .brand b { display: block; font-size: 15px; color: #fff; }
+  .brand span { display: block; font-size: 11px; color: #8fa6c2; margin-top: 2px; }
+  .nav { display: flex; flex-direction: column; gap: 4px; }
+  .nav a {
+    color: #a9bdd4; text-decoration: none; padding: 9px 10px; border-radius: 9px;
+    display: flex; gap: 9px; align-items: center; font-size: 13px;
+  }
+  .nav a:hover, .nav a.active { background: rgba(96,165,250,.14); color: #fff; }
+  .nav a .ico { width: 18px; text-align: center; opacity: .85; }
+  .side-card { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; padding: 12px; }
+  .side-label { font-size: 10px; letter-spacing: 1.4px; color: #7f96b2; font-weight: 700; }
+  #sideProject { color: #fff; font-weight: 700; margin: 5px 0 10px; word-break: break-all; }
+  .adapter-list { display: flex; flex-direction: column; gap: 6px; }
+  .adapter { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #b9cbe0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #64748b; flex: 0 0 auto; }
+  .dot.on { background: #34d399; box-shadow: 0 0 0 3px rgba(52,211,153,.12); }
+  .dot.off { background: #f87171; }
+  .side-foot { margin-top: auto; font-size: 10.5px; color: #627b98; line-height: 1.6; }
+  main { padding: 24px 28px 30px; min-width: 0; }
+  .topbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; margin-bottom: 18px; flex-wrap: wrap; }
+  .eyebrow { font-size: 10px; letter-spacing: 2.4px; color: var(--blue); font-weight: 800; }
+  h1 { font-size: 29px; margin: 4px 0 0; letter-spacing: .5px; }
+  .controls { display: flex; gap: 9px; align-items: flex-end; flex-wrap: wrap; }
+  .control { display: flex; flex-direction: column; gap: 4px; }
+  .control label { font-size: 10.5px; color: var(--muted); }
+  select, input, button { font: inherit; }
+  select, input {
+    background: #fff; border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 10px; color: var(--ink); outline: none;
+  }
+  select:focus, input:focus { border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(37,99,235,.10); }
+  .btn {
+    border: 1px solid transparent; border-radius: 9px; padding: 8px 13px; cursor: pointer;
+    font-weight: 700; font-size: 12.5px; background: var(--blue); color: #fff;
+  }
+  .btn:hover { filter: brightness(1.05); }
+  .btn.ghost { background: #fff; border-color: var(--line); color: #334155; }
+  .btn.green { background: var(--green); }
+  .btn.dark { background: #0f172a; }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .kpi {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 15px; box-shadow: 0 2px 8px rgba(15,23,42,.035); position: relative; overflow: hidden;
+  }
+  .kpi:after { content: ""; position: absolute; right: -16px; top: -16px; width: 54px; height: 54px; border-radius: 50%; background: rgba(37,99,235,.07); }
+  .kpi .k-label { font-size: 11px; color: var(--muted); }
+  .kpi .k-value { font-size: 27px; font-weight: 800; margin-top: 4px; line-height: 1.1; }
+  .kpi .k-sub { font-size: 10.5px; color: #94a3b8; margin-top: 4px; }
+  .kpi.blue .k-value { color: var(--blue); } .kpi.green .k-value { color: var(--green); }
+  .kpi.amber .k-value { color: var(--amber); } .kpi.violet .k-value { color: var(--violet); }
+  .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; margin-bottom: 14px; }
+  .grid.wide-left { grid-template-columns: 1.45fr .85fr; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 17px; box-shadow: 0 2px 8px rgba(15,23,42,.035); min-width: 0;
+  }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .card-head h2 { font-size: 14px; margin: 0; letter-spacing: .2px; }
+  .card-head .hint { font-size: 10.5px; color: #94a3b8; }
+  .pipeline { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .stage { background: #f8fafc; border: 1px solid #edf2f7; border-radius: 10px; padding: 10px 9px; position: relative; }
+  .stage .s-label { font-size: 10.5px; color: var(--muted); }
+  .stage .s-num { font-size: 21px; font-weight: 800; margin-top: 2px; }
+  .stage .s-bar { height: 4px; border-radius: 999px; background: #e2e8f0; margin-top: 7px; overflow: hidden; }
+  .stage .s-bar i { display: block; height: 100%; border-radius: 999px; background: var(--blue); width: 0; }
+  .stage.s-ready .s-num { color: #64748b; } .stage.s-ready .s-bar i { background: #94a3b8; }
+  .stage.s-run .s-num { color: var(--blue); } .stage.s-run .s-bar i { background: var(--blue); }
+  .stage.s-review .s-num { color: var(--amber); } .stage.s-review .s-bar i { background: var(--amber); }
+  .stage.s-merge .s-num { color: var(--violet); } .stage.s-merge .s-bar i { background: var(--violet); }
+  .stage.s-done .s-num { color: var(--green); } .stage.s-done .s-bar i { background: var(--green); }
+  .stage.s-fix .s-num { color: var(--red); } .stage.s-fix .s-bar i { background: var(--red); }
+  .donut-wrap { display: flex; gap: 16px; align-items: center; }
+  .donut {
+    width: 132px; height: 132px; border-radius: 50%; flex: 0 0 auto;
+    background: conic-gradient(#e2e8f0 0 100%);
+    display: grid; place-items: center; position: relative;
+  }
+  .donut:after { content: ""; position: absolute; inset: 15px; border-radius: 50%; background: #fff; }
+  .donut-hole { position: relative; z-index: 1; text-align: center; }
+  .donut-hole strong { display: block; font-size: 25px; line-height: 1; }
+  .donut-hole span { font-size: 10px; color: var(--muted); }
+  .legend { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .legend-item { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #475569; }
+  .legend-item .dot { width: 8px; height: 8px; }
+  .legend-item b { margin-left: auto; color: var(--ink); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: #7b8794; font-size: 10.5px; letter-spacing: .5px; font-weight: 700; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 8px; border-bottom: 1px solid #eef2f7; vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  .title-cell { font-weight: 700; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; background: #f1f5f9; color: #475569; white-space: nowrap; }
+  .pill.blue { background: #eaf2ff; color: #1d4ed8; }
+  .pill.green { background: #e9f9ef; color: #047857; }
+  .pill.amber { background: #fff7e6; color: #b45309; }
+  .pill.violet { background: #f3edff; color: #6d28d9; }
+  .pill.red { background: #fef2f2; color: #b91c1c; }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; color: #64748b; }
+  .agent-list { display: flex; flex-direction: column; gap: 9px; }
+  .agent-row { display: grid; grid-template-columns: 112px 1fr 54px; gap: 8px; align-items: center; }
+  .agent-name { font-size: 11.5px; color: #334155; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-track { height: 8px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
+  .agent-track i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #3b82f6, #8b5cf6); width: 0; }
+  .agent-val { font-size: 10.5px; color: #64748b; text-align: right; }
+  .adapter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; padding-top: 12px; border-top: 1px dashed var(--line); }
+  .chip { font-size: 10.5px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; color: #475569; display: inline-flex; align-items: center; gap: 5px; }
+  .candidates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .candidate { border: 1px solid var(--line); border-radius: 11px; padding: 11px 12px; background: #fbfcfe; }
+  .candidate .c-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .candidate .c-id { font-weight: 800; font-size: 12px; }
+  .candidate .c-task { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+  .candidate .c-sha { margin-top: 7px; }
+  .candidate .c-actions { display: flex; gap: 6px; margin-top: 9px; }
+  .settings { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 9px; align-items: end; }
+  .settings .control { min-width: 0; }
+  .settings input { width: 100%; }
+  .settings-actions { display: flex; gap: 6px; }
+  #notice { margin-top: 12px; min-height: 20px; color: #047857; font-size: 12px; white-space: pre-wrap; }
+  #error { margin-top: 6px; min-height: 18px; color: #b91c1c; font-size: 12px; white-space: pre-wrap; }
+  .empty { color: #94a3b8; font-size: 12px; padding: 14px 4px; text-align: center; }
+  .foot { display: flex; justify-content: space-between; color: #94a3b8; font-size: 10.5px; margin-top: 16px; }
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { flex-direction: row; align-items: center; padding: 12px 16px; gap: 16px; }
+    .nav { flex-direction: row; } .side-card, .side-foot { display: none; }
+    main { padding: 18px; }
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .grid, .grid.wide-left { grid-template-columns: 1fr; }
+    .candidates { grid-template-columns: 1fr; }
+    .settings { grid-template-columns: 1fr; }
+    .pipeline { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">AG</div>
+      <div><b>Agent Guild</b><span>协调控制台</span></div>
+    </div>
+    <nav class="nav">
+      <a class="active" href="#overview"><span class="ico">◈</span>总览</a>
+      <a href="#tasks"><span class="ico">▤</span>任务</a>
+      <a href="#candidates"><span class="ico">◉</span>候选</a>
+    </nav>
+    <div class="side-card">
+      <div class="side-label">当前项目</div>
+      <div id="sideProject">—</div>
+      <div class="side-label">适配器</div>
+      <div id="sideAdapters" class="adapter-list"></div>
+    </div>
+    <div class="side-foot">B 内部试点<br>SQLite · MCP · CLI<br>WebView2 控制台</div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">AGENT GUILD / CONTROL PLANE</div>
+        <h1>协调总览</h1>
+      </div>
+      <div class="controls">
+        <div class="control"><label>项目</label><select id="projects"></select></div>
+        <div class="control"><label>Agent</label>
+          <select id="agent">
+            <option value="auto">Auto（OR 推荐）</option>
+            <option value="codex-deepseek" selected>Codex-DeepSeek</option>
+            <option value="dsh">DSH</option>
+            <option value="codex-zhipu">Codex-智谱</option>
+            <option value="codex-appserver">Codex-AppServer</option>
+          </select>
+        </div>
+        <div class="control"><label>审批角色</label>
+          <select id="approverRole">
+            <option value="reviewer" selected>Reviewer</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <button id="refresh" class="btn ghost">刷新</button>
+      </div>
+    </header>
+
+    <section id="overview" class="kpis">
+      <div class="kpi blue"><div class="k-label">任务</div><div class="k-value" id="kpiTasks">0</div><div class="k-sub" id="kpiTasksSub">当前项目</div></div>
+      <div class="kpi green"><div class="k-label">成功合入</div><div class="k-value" id="kpiMerged">0</div><div class="k-sub">候选已合入</div></div>
+      <div class="kpi amber"><div class="k-label">待审批</div><div class="k-value" id="kpiPending">0</div><div class="k-sub">待人工审批</div></div>
+      <div class="kpi violet"><div class="k-label">成本估算</div><div class="k-value" id="kpiCost">¥0.00</div><div class="k-sub">按官方价目表估算</div></div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-head"><h2>任务流水线</h2><span class="hint">按生命周期分布</span></div>
+        <div id="pipeline" class="pipeline"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>候选状态</h2><span class="hint" id="donutHint">0 个候选</span></div>
+        <div class="donut-wrap">
+          <div id="donut" class="donut"><div class="donut-hole"><strong id="donutTotal">0</strong><span>候选</span></div></div>
+          <div id="donutLegend" class="legend"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tasks" class="grid wide-left">
+      <div class="card">
+        <div class="card-head"><h2>任务</h2><span class="hint">启动 Run 会真正调用 agent</span></div>
+        <table>
+          <thead><tr><th>任务</th><th>生命周期</th><th>状态</th><th>负责人</th><th>操作</th></tr></thead>
+          <tbody id="taskRows"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Agent 用量</h2><span class="hint">最近 50 次 Run</span></div>
+        <div id="agentBars" class="agent-list"><div class="empty">暂无运行记录</div></div>
+        <div id="adapterChips" class="adapter-chips"></div>
+      </div>
+    </section>
+
+    <section id="candidates" class="card" style="margin-bottom:14px;">
+      <div class="card-head"><h2>候选</h2><span class="hint">批准后可填写仓库/Worktree 合入</span></div>
+      <div id="candidateCards" class="candidates"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>运行设置</h2><span class="hint">启动 Run 与真实合入使用</span></div>
+      <div class="settings">
+        <div class="control"><label>仓库路径</label><input id="repo" placeholder="C:\path\to\repo" /></div>
+        <div class="control"><label>合入 Worktree</label><input id="worktree" placeholder="C:\path\to\integration" /></div>
+        <div class="control"><label>检查命令</label><input id="check" placeholder="python -m py_compile src/app.py" /></div>
+        <div class="settings-actions">
+          <button id="fillDemo" class="btn ghost">填入示例</button>
+          <button id="saveSettings" class="btn dark">保存设置</button>
+        </div>
+      </div>
+      <div id="notice"></div>
+      <div id="error"></div>
+    </section>
+
+    <div class="foot"><span>Agent Guild · B 内部试点</span><span>文件级隔离 · 人工审批 · 真实合入</span></div>
+  </main>
+</div>
+<script src="renderer.js"></script>
+</body>
+</html>

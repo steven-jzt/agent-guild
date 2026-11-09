@@ -1,0 +1,35 @@
+{
+  "packageName": "Agent_Guild_交接包_v1.0.1_2026-11-09",
+  "preparedOn": "2026-11-09",
+  "timezone": "Asia/Shanghai",
+  "sourceCommit": "a58e08e7340400fead3bed87ebbb315d4cf39283",
+  "sourceBranch": "codex/agent-guild-m0",
+  "trackedProjectFiles": 31,
+  "checks": [
+    {
+      "exitCode": 0,
+      "command": "npm test",
+      "execution": "packaging workspace",
+      "failed": 0,
+      "passed": 17
+    },
+    {
+      "exitCode": 0,
+      "command": "npm run typecheck",
+      "execution": "packaging workspace"
+    }
+  ],
+  "realModelChecks": "Historical M0 results are documented in agent-guild/docs; not rerun for packaging.",
+  "currentStage": "M0 incomplete; API-key 401 blocker resolved; M1/M2 not implemented.",
+  "excluded": [
+    "node_modules",
+    ".git",
+    ".env files",
+    "credentials",
+    "account sessions",
+    "raw model logs",
+    "experimental repositories",
+    "classmate mall model"
+  ],
+  "manifest": "文件清单_SHA256.json covers every payload file except itself."
+}

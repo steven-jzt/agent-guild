@@ -1,0 +1,25 @@
+{
+  "name": "agent-guild",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "m0": "node --experimental-strip-types src/experiments/m0.ts",
+    "m0:dsh": "node --experimental-strip-types src/experiments/dsh-smoke.ts",
+    "m0:dsh:interaction": "node --experimental-strip-types src/experiments/dsh-interaction.ts",
+    "m0:cancel": "node --experimental-strip-types src/experiments/cancel-smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sdk-client": "0.0.1-rc.1"
+  }
+}

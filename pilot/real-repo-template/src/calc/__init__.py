@@ -1,0 +1,1 @@
+"""calc: minimal arithmetic package."""

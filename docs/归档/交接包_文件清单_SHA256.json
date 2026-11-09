@@ -1,0 +1,182 @@
+[
+  {
+    "path": "00_先读我_进度与架构交接.md",
+    "bytes": 16871,
+    "sha256": "838989809bfe06abba1d9712b747c0caa295f68269326014048ded7f5333ffbc"
+  },
+  {
+    "path": "交付验证摘要.json",
+    "bytes": 1041,
+    "sha256": "4a7182173c0b1916e823ae0fadd875f349e9edcbbfac3367ea163e1764eded43"
+  },
+  {
+    "path": "设计文档/Agent_Guild_项目构想与架构草案_2026-11-07.md",
+    "bytes": 13146,
+    "sha256": "1c550ab41760c9334a8b20af4654d3c34d00c28c73ccd4c582e4c9e058e6943c"
+  },
+  {
+    "path": "设计文档/Agent_Guild_Handoff_2026-11-07.md",
+    "bytes": 14853,
+    "sha256": "78d5aef5595b9b6bdf40eb3495074e0ed0e5929375aeccbd0c24438e8e5d851a"
+  },
+  {
+    "path": "设计文档/Agent_Guild_v1.0.1_计划与架构总结_2026-11-08.md",
+    "bytes": 28626,
+    "sha256": "1358f1be5f0444062c83cdf7d751fade104946dab884379ee085de566c21d6bd"
+  },
+  {
+    "path": "agent-guild/.gitignore",
+    "bytes": 62,
+    "sha256": "17b988a9ae05914d4a5e37d60567e74597df6a22911e3020a5decf7508c4d46e"
+  },
+  {
+    "path": "agent-guild/docs/M0_验证记录_2026-11-08.md",
+    "bytes": 10308,
+    "sha256": "e24ee33282c96c76cdd051f42634bbb33d3ca5d89786269070d5f7d9ce4014bb"
+  },
+  {
+    "path": "agent-guild/package-lock.json",
+    "bytes": 734952,
+    "sha256": "799a9a2fefc33449ed6d41018ebc7cf3f879c2aa29f9480743471358b481e167"
+  },
+  {
+    "path": "agent-guild/package.json",
+    "bytes": 773,
+    "sha256": "d881a78e60e677ac8a06ac2cf6e11a9635a065d73032465699277ccee538b158"
+  },
+  {
+    "path": "agent-guild/README.md",
+    "bytes": 4236,
+    "sha256": "37a8d69918f1ca489365afe7d7c8b687808d1c88db7d3b508434e595bb8e65f1"
+  },
+  {
+    "path": "agent-guild/src/adapters/codex.ts",
+    "bytes": 2488,
+    "sha256": "c667efcd3204528ffe320ec2f7b3d6cf927e22cd47ceca3bd748ce732909e913"
+  },
+  {
+    "path": "agent-guild/src/adapters/dsh-outcome.ts",
+    "bytes": 879,
+    "sha256": "02fc5087d3d7a9d0b777a55ca68b5ea763062f42a2e91e1bdc399d2e3b9583c8"
+  },
+  {
+    "path": "agent-guild/src/adapters/dsh.ts",
+    "bytes": 2304,
+    "sha256": "4ada0429cf6ca8dd1b477ccd8c7f36a41279bb4ae32f4947f07bd76023b83cee"
+  },
+  {
+    "path": "agent-guild/src/experiments/cancel-smoke.ts",
+    "bytes": 5545,
+    "sha256": "8834c1dad0043841c76fe63fe8e3b7ffd04bbfd68fe674e4830f3203730651e0"
+  },
+  {
+    "path": "agent-guild/src/experiments/dsh-interaction.ts",
+    "bytes": 3218,
+    "sha256": "b31ab743307c1a5c8e1bd3ca7ac8f104bd8e2d6b3d77b71d84428da5b18b9123"
+  },
+  {
+    "path": "agent-guild/src/experiments/dsh-launch.ts",
+    "bytes": 882,
+    "sha256": "d1264c20e241e3d44bc588a0af1de2f3456901c2369b51818d2c2a40745f6eef"
+  },
+  {
+    "path": "agent-guild/src/experiments/dsh-smoke.ts",
+    "bytes": 3738,
+    "sha256": "bd45b9ea6c4167a5217fcfd6096dfda996412b299a047ecccb016be4c52f726e"
+  },
+  {
+    "path": "agent-guild/src/experiments/evidence.ts",
+    "bytes": 646,
+    "sha256": "14703c210d0852f2e77bc7a9f48bb938136bb0d99dfd0de26ef2b8b314171be2"
+  },
+  {
+    "path": "agent-guild/src/experiments/m0.ts",
+    "bytes": 2794,
+    "sha256": "5bea4f46ab45a8bd642de591152fae766af885a0da676dd8e6db8f02440f8843"
+  },
+  {
+    "path": "agent-guild/src/experiments/workspace.ts",
+    "bytes": 2852,
+    "sha256": "238c0f922acff9ecef14633599359e2f6f7f2468d84d1a5a91543e04339c2325"
+  },
+  {
+    "path": "agent-guild/src/transport/JobHost.cs",
+    "bytes": 5922,
+    "sha256": "8d06e7431b29ec3ba97adb7df2df7b223cb86fe3f62dfb24adffc4adc9c324e6"
+  },
+  {
+    "path": "agent-guild/src/transport/json-lines.ts",
+    "bytes": 665,
+    "sha256": "cdf386ebbcfcf1da8e9d09c03e57699c6b41d12797409f22d4cb3a550c46d178"
+  },
+  {
+    "path": "agent-guild/src/transport/managed-process.ts",
+    "bytes": 1616,
+    "sha256": "724b04c41b4cecd8a1d7a7b585226787e69501425049ae61b468b231b10ec9c6"
+  },
+  {
+    "path": "agent-guild/src/transport/rpc-process.ts",
+    "bytes": 5112,
+    "sha256": "79c5810a85ecb66ad89410fc31f7b3e2856622e08f69a286020728d5966f95e8"
+  },
+  {
+    "path": "agent-guild/test/codex.test.ts",
+    "bytes": 764,
+    "sha256": "d99197f87c935450e029d68e9d4c5f94853e61231ca60dfbbcc10c7edf6c6ddf"
+  },
+  {
+    "path": "agent-guild/test/dsh.test.ts",
+    "bytes": 1307,
+    "sha256": "3a44353ea3526155119d112a98206362d1458841c31451273a2b7415cb0c7cbc"
+  },
+  {
+    "path": "agent-guild/test/experiment.test.ts",
+    "bytes": 2563,
+    "sha256": "ea968dcf13c9560b189135dbfff41aab912b0376a2b206d5d008f355b2d0cd20"
+  },
+  {
+    "path": "agent-guild/test/fixtures/codex-server.mjs",
+    "bytes": 818,
+    "sha256": "64c4259004810dceb95202b28d30403aaeeed5bdf07236e0839915c012391c9e"
+  },
+  {
+    "path": "agent-guild/test/fixtures/dsh-server.mjs",
+    "bytes": 1189,
+    "sha256": "189900be364b2864acf950daa53439008b3b83f681f17da93e675e2aebed0edb"
+  },
+  {
+    "path": "agent-guild/test/fixtures/process-parent.ts",
+    "bytes": 325,
+    "sha256": "21446bb5c42bb81d1658a2f277be17b97588037bd06a919414c70e7361a781ab"
+  },
+  {
+    "path": "agent-guild/test/fixtures/process-worker.mjs",
+    "bytes": 291,
+    "sha256": "873847a83b86a1ef2f8ae97d1b73d09d169e351c3555c1b0b014f2a72e9b226f"
+  },
+  {
+    "path": "agent-guild/test/fixtures/rpc-server.mjs",
+    "bytes": 720,
+    "sha256": "2d9b98ac3250acc0a02cfc072aacc018efa8e1cf138e917b8bf3a4d57e46878e"
+  },
+  {
+    "path": "agent-guild/test/json-lines.test.ts",
+    "bytes": 742,
+    "sha256": "c75b3aa5c2402a721afb9b980ca317b970e9f1978825c6e5c7771cc72d496064"
+  },
+  {
+    "path": "agent-guild/test/managed-process.test.ts",
+    "bytes": 2356,
+    "sha256": "99bbf0082f74793521b0173e9288228224be3f8304ecd7c7f6d0a280d53da890"
+  },
+  {
+    "path": "agent-guild/test/rpc-process.test.ts",
+    "bytes": 1881,
+    "sha256": "50086b2093f9fbe88fd45bcb2558f252016c8b37514940317d291bdd85a075da"
+  },
+  {
+    "path": "agent-guild/tsconfig.json",
+    "bytes": 361,
+    "sha256": "52c3c68d33e99ff18e5d710214f7c6b68f1ab07a00f69f16b6f0c7b4b18f708b"
+  }
+]

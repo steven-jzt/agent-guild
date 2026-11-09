@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Agent Guild 组织协调与分工</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #eef1f5; color: #17212b;
+    font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  }
+  .page { width: 1600px; min-height: 1220px; margin: 0 auto; padding: 38px 46px 28px; background: #f7f8fa; }
+  .eyebrow { color: #1f6feb; font-size: 13px; font-weight: 700; letter-spacing: 3px; }
+  h1 { font-size: 42px; margin: 8px 0 6px; letter-spacing: 1px; }
+  .sub { color: #5b6b7a; font-size: 17px; margin-bottom: 26px; }
+  h2 { font-size: 20px; margin: 0 0 12px; }
+  .top { display: grid; grid-template-columns: 1fr 1.55fr 1fr; gap: 16px; }
+  .card { background: #fff; border: 1px solid #dce1e7; border-radius: 14px; padding: 18px 20px; box-shadow: 0 2px 8px rgba(20,30,40,.04); }
+  .label { font-size: 12px; letter-spacing: 1.5px; color: #7b8794; font-weight: 700; text-transform: uppercase; }
+  .role { font-size: 22px; font-weight: 700; margin: 6px 0 8px; }
+  .card p { margin: 0; font-size: 14px; line-height: 1.75; color: #4a5a68; }
+  .human { border-top: 4px solid #1a7f37; }
+  .ui { border-top: 4px solid #8250df; }
+  .coordinator { border: 0; background: linear-gradient(135deg, #132238, #1d3552); color: #fff; }
+  .coordinator .label { color: #9fb4cc; }
+  .coordinator .role { color: #fff; }
+  .coordinator p { color: #c9d7e5; }
+  .coord-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+  .coord-list span { background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18); color: #dce9f5; border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+  .down { text-align: center; color: #8a98a7; font-size: 22px; margin: 16px 0 6px; }
+  .section { margin-top: 12px; }
+  .agents { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .agent { position: relative; padding-top: 15px; }
+  .agent:before { content: ""; position: absolute; left: 0; top: 0; right: 0; height: 4px; border-radius: 14px 14px 0 0; }
+  .a1:before { background: #1f6feb; } .a2:before { background: #1a7f37; }
+  .a3:before { background: #bf8700; } .a4:before { background: #8250df; }
+  .agent h3 { font-size: 18px; margin: 0 0 3px; }
+  .tag { font-size: 12px; color: #7b8794; }
+  .agent ul { margin: 9px 0 0; padding-left: 17px; color: #4a5a68; font-size: 13px; line-height: 1.75; }
+  .agent .one { margin-top: 10px; font-size: 12px; color: #1a7f37; font-weight: 700; }
+  .flow-box { background: #fff; border: 1px solid #dce1e7; border-radius: 14px; padding: 16px 18px; }
+  .flow { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .step { background: #f1f5fa; border: 1px solid #d8e2ee; color: #26445f; border-radius: 8px; padding: 7px 10px; font-size: 13px; font-weight: 700; }
+  .step.hot { background: #e8f1ff; border-color: #b6d2f7; color: #1f4f8a; }
+  .step.done { background: #e9f7ee; border-color: #bfe5cb; color: #1a7f37; }
+  .arrow { color: #9aa8b6; font-size: 15px; }
+  .bottom { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; margin-top: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #f2f5f8; color: #5b6b7a; text-align: left; font-weight: 700; }
+  th, td { padding: 9px 10px; border-bottom: 1px solid #e3e8ee; vertical-align: top; }
+  td b { color: #17212b; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .metric { border: 1px solid #dce1e7; border-radius: 10px; padding: 12px 14px; background: #fbfcfd; }
+  .metric .num { font-size: 25px; font-weight: 800; color: #1f6feb; line-height: 1.1; }
+  .metric .cap { font-size: 12px; color: #6b7a88; margin-top: 4px; }
+  .metric.green .num { color: #1a7f37; }
+  .metric.amber .num { color: #bf8700; }
+  .metric.dark .num { color: #17212b; }
+  .note { margin-top: 13px; padding: 11px 14px; border-left: 3px solid #bf8700; background: #fff8e6; color: #6b5200; font-size: 12.5px; line-height: 1.7; border-radius: 6px; }
+  footer { margin-top: 14px; color: #7b8794; font-size: 12px; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">AGENT GUILD · B 内部试点 · 2026-11-09</div>
+  <h1>组织协调与分工</h1>
+  <div class="sub">1 个人类管理员 + 1 个协调内核 + 3 类真实 agent + 1 个 WebView2 控制台</div>
+
+  <div class="top">
+    <div class="card human">
+      <div class="label">HUMAN</div>
+      <div class="role">你 / 管理员</div>
+      <p>定目标与优先级；做最终审批；确认真实合入。<br>不直接改 agent 的 worktree。</p>
+    </div>
+
+    <div class="card coordinator">
+      <div class="label">COORDINATION CORE</div>
+      <div class="role">Coordinator · 单一状态源</div>
+      <p>任务、租约、fencing、文件预约、生命周期、预算、审计、Candidate / Merge 门禁。</p>
+      <div class="coord-list">
+        <span>SQLite</span><span>CLI / MCP</span><span>租约 + TTL</span>
+        <span>文件预约</span><span>Candidate + SHA</span><span>预算硬止损</span>
+      </div>
+    </div>
+
+    <div class="card ui">
+      <div class="label">CONTROL PLANE</div>
+      <div class="role">WebView2 控制台</div>
+      <p>启动 Run、批准、真实合入；Electron 崩了之后的替代桌面壳。</p>
+      <p style="margin-top:7px;color:#1a7f37;font-weight:700;">已验证：Codex + DSH</p>
+    </div>
+  </div>
+
+  <div class="down">▼&nbsp;&nbsp;任务 / 预约 / 审批授权&nbsp;&nbsp;▼</div>
+
+  <div class="section">
+    <h2>执行层：谁负责什么</h2>
+    <div class="agents">
+      <div class="card agent a1">
+        <h3>Codex-DeepSeek</h3>
+        <div class="tag">UI 默认 · deepseek-flash</div>
+        <ul>
+          <li>启动 Run 默认 agent</li>
+          <li>27.9s 完成 add mul</li>
+          <li>JSONL events + usage</li>
+        </ul>
+        <div class="one">只改预约文件，不自行合入</div>
+      </div>
+      <div class="card agent a2">
+        <h3>DSH</h3>
+        <div class="tag">headless · deepseek-flash</div>
+        <ul>
+          <li>快速单文件任务</li>
+          <li>UI 17.6s / CLI 5 任务</li>
+          <li>独立 DSH_HOME，避开 profile 锁</li>
+        </ul>
+        <div class="one">3 成功 / 2 正确拦截</div>
+      </div>
+      <div class="card agent a3">
+        <h3>Codex-智谱</h3>
+        <div class="tag">GLM Coding Plan · glm-5.3</div>
+        <ul>
+          <li>第二模型 / 备选 provider</li>
+          <li>3-agent 并发成员</li>
+          <li>Responses API</li>
+        </ul>
+        <div class="one">只改预约模块</div>
+      </div>
+      <div class="card agent a4">
+        <h3>Codex App Server</h3>
+        <div class="tag">JSON-RPC · stdio</div>
+        <ul>
+          <li>initialize / thread / turn</li>
+          <li>221 个事件完成一次 V1</li>
+          <li>adapter 已接</li>
+        </ul>
+        <div class="one">真实改文件 + 真实 cherry-pick</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>一条任务的协调路径</h2>
+    <div class="flow-box">
+      <div class="flow">
+        <span class="step">任务</span><span class="arrow">→</span>
+        <span class="step">文件预约</span><span class="arrow">→</span>
+        <span class="step">Worktree</span><span class="arrow">→</span>
+        <span class="step hot">Agent 执行</span><span class="arrow">→</span>
+        <span class="step">Scope 检查</span><span class="arrow">→</span>
+        <span class="step">Candidate</span><span class="arrow">→</span>
+        <span class="step">Evidence</span><span class="arrow">→</span>
+        <span class="step">人工批准</span><span class="arrow">→</span>
+        <span class="step done">真实 cherry-pick</span><span class="arrow">→</span>
+        <span class="step done">Accepted</span>
+      </div>
+      <div style="margin-top:10px;color:#6b7a88;font-size:12.5px;">
+        关键原则：agent 只在 worktree 内改预约文件；Coordinator 不替 agent 推理；合入必须经过人工批准与真实 Git 操作。
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="card">
+      <h2>分工矩阵</h2>
+      <table>
+        <thead><tr><th>角色</th><th>负责</th><th>不负责</th></tr></thead>
+        <tbody>
+          <tr><td><b>人类 / 管理员</b></td><td>目标、优先级、审批、合入确认</td><td>不直接改 agent worktree</td></tr>
+          <tr><td><b>Coordinator</b></td><td>状态、租约、预约、生命周期、预算、审计</td><td>不做模型推理，不替 agent 写代码</td></tr>
+          <tr><td><b>Agent</b></td><td>在预约范围内实现、产出 commit</td><td>不越界、不自行合入、不改他人文件</td></tr>
+          <tr><td><b>Verifier</b></td><td>跑 checks、把 SHA + exit code 绑定证据</td><td>不替代人工批准</td></tr>
+          <tr><td><b>WebView2 控制台</b></td><td>启动 Run、批准、触发合入、展示候选</td><td>不直接操作文件系统</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>试点数据（截至 2026-11-09）</h2>
+        <div class="metrics">
+          <div class="metric"><div class="num">73</div><div class="cap">单元测试全绿</div></div>
+          <div class="metric green"><div class="num">11</div><div class="cap">成功合入</div></div>
+          <div class="metric amber"><div class="num">2</div><div class="cap">正确拦截</div></div>
+          <div class="metric dark"><div class="num">0</div><div class="cap">越界合入</div></div>
+          <div class="metric"><div class="num">3</div><div class="cap">agent 并发</div></div>
+          <div class="metric green"><div class="num">24.8s</div><div class="cap">多模块仓库墙钟</div></div>
+        </div>
+        <div class="note">
+          真实执行 15+ 次；DeepSeek 成本估算约 ¥0.03–0.04；智谱按 Coding Plan 套餐计。
+          当前边界：Electron 在本机启动阶段崩 0xC0000005，已由 WebView2 替代。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>Agent Guild · 组织协调与分工</span>
+    <span>单人 + 多 agent · 文件级隔离 · 人工审批 · 真实合入</span>
+  </footer>
+</div>
+</body>
+</html>
