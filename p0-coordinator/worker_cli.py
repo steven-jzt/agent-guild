@@ -66,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--approval-ttl", type=float, default=86400)
     p.add_argument("--required-approver-role", choices=["reviewer", "admin"], default="reviewer")
     p.add_argument("--approval-chain", default="", help="逗号分隔，如 reviewer,admin")
+    p.add_argument("--required-checks", help="JSON array: [{\"id\":\"platform-test\",\"kind\":\"test\"}]")
     p.add_argument("--budget", type=float)
 
     p = sub.add_parser("projects", help="列出项目")
@@ -82,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dod", default="")
     p.add_argument("--description", default="")
     p.add_argument("--checks", help="JSON array: [{\"type\":\"file_exists\",\"path\":\"...\"}]")
+    p.add_argument("--required-checks", help="JSON array，覆盖项目必需检查项")
     p.add_argument("--repo-id", default="")
 
     p = sub.add_parser("claim", help="领取任务")
@@ -247,6 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("record-evidence", help="记录绑定 candidate_sha 的证据")
     p.add_argument("--candidate", required=True)
     p.add_argument("--type", required=True)
+    p.add_argument("--check-id", default="", help="必需检查项 ID（门禁证据必须填写）")
+    p.add_argument("--batch", help="验证批次 ID（缺省用候选当前打开批次）")
     p.add_argument("--command", default="")
     p.add_argument("--cwd", default="")
     p.add_argument("--exit-code", type=int)
@@ -255,6 +259,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--execution")
 
     p = sub.add_parser("mark-candidate-ready", help="验证通过 -> awaiting_human")
+    p.add_argument("--candidate", required=True)
+
+    p = sub.add_parser("begin-validation-batch", help="为 Candidate 开启新的验证批次")
+    p.add_argument("--candidate", required=True)
+    p.add_argument("--reason", default="")
+
+    p = sub.add_parser("validation-batches", help="查看 Candidate 的验证批次")
+    p.add_argument("--candidate", required=True)
+
+    p = sub.add_parser("candidate-gate", help="查看 Candidate 的必需检查门禁结果")
     p.add_argument("--candidate", required=True)
 
     p = sub.add_parser("approve-candidate", help="人工批准 Candidate")
@@ -364,6 +378,9 @@ def run(args) -> object:
             args.approvals_required, args.approval_ttl, args.budget,
             required_approver_role=args.required_approver_role,
             approval_chain=args.approval_chain,
+            required_checks=(
+                _json_array_arg(args.required_checks) if args.required_checks else None
+            ),
         )
     if args.cmd == "projects":
         return coord.list_projects()
@@ -381,6 +398,9 @@ def run(args) -> object:
             description=args.description,
             checks=_json_array_arg(args.checks),
             repo_id=args.repo_id,
+            required_checks=(
+                _json_array_arg(args.required_checks) if args.required_checks else None
+            ),
         )
     if args.cmd == "claim":
         if args.planned:
@@ -501,9 +521,16 @@ def run(args) -> object:
         return coord.record_evidence(
             args.candidate, args.type, args.command, args.cwd,
             args.exit_code, args.output_ref, args.sha, args.execution,
+            check_id=args.check_id, batch_id=args.batch,
         )
     if args.cmd == "mark-candidate-ready":
         return coord.mark_candidate_ready(args.candidate)
+    if args.cmd == "begin-validation-batch":
+        return coord.begin_validation_batch(args.candidate, args.reason)
+    if args.cmd == "validation-batches":
+        return coord.list_validation_batches(args.candidate)
+    if args.cmd == "candidate-gate":
+        return coord.evaluate_candidate_gate(args.candidate)
     if args.cmd == "approve-candidate":
         return coord.approve_candidate(
             args.candidate, args.approver, args.note, role=args.role,

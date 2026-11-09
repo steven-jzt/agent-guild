@@ -34,6 +34,11 @@ TOOLS = [
                 "require_verification": {"type": "boolean"},
                 "approvals_required": {"type": "integer"},
                 "approval_ttl_seconds": {"type": "number"},
+                "required_checks": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "必需检查项；至少一项 kind=test、一项 kind=review",
+                },
                 "budget_usd": {"type": "number"},
             },
             "required": ["name"],
@@ -54,6 +59,7 @@ TOOLS = [
                 "priority": {"type": "integer"},
                 "kind": {"type": "string"},
                 "checks": {"type": "array", "items": {"type": "object"}},
+                "required_checks": {"type": "array", "items": {"type": "object"}},
                 "repo_id": {"type": "string"},
             },
             "required": ["project_id", "title"],
@@ -437,12 +443,14 @@ TOOLS = [
     },
     {
         "name": "record_evidence",
-        "description": "记录绑定 candidate_sha 的证据（测试/命令/输出引用）。",
+        "description": "记录证据。带 check_id 的门禁证据必须绑定 candidate_sha 并落在打开的验证批次；不带 check_id 只作记录，不能替代必需检查。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "candidate_id": {"type": "string"},
                 "type": {"type": "string"},
+                "check_id": {"type": "string"},
+                "batch_id": {"type": "string"},
                 "command": {"type": "string"},
                 "cwd": {"type": "string"},
                 "exit_code": {"type": "integer"},
@@ -455,7 +463,37 @@ TOOLS = [
     },
     {
         "name": "mark_candidate_ready",
-        "description": "验证通过 -> awaiting_human（要求 candidate_sha 上有 exit_code=0 的证据）。",
+        "description": "验证通过 -> awaiting_human。要求当前验证批次内所有必需检查项（至少一项 test + 一项 review）均有效通过。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"candidate_id": {"type": "string"}},
+            "required": ["candidate_id"],
+        },
+    },
+    {
+        "name": "begin_validation_batch",
+        "description": "为 Candidate 开启新的验证批次；旧批次证据不再参与门禁。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["candidate_id"],
+        },
+    },
+    {
+        "name": "candidate_gate",
+        "description": "只读查看 Candidate 的必需检查门禁结果（missing/failed/stale）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"candidate_id": {"type": "string"}},
+            "required": ["candidate_id"],
+        },
+    },
+    {
+        "name": "list_validation_batches",
+        "description": "查看 Candidate 的验证批次历史。",
         "inputSchema": {
             "type": "object",
             "properties": {"candidate_id": {"type": "string"}},
@@ -689,6 +727,7 @@ def call_tool(c: Coordinator, name: str, args: dict[str, Any]) -> Any:
             int(args.get("approvals_required", 1)),
             float(args.get("approval_ttl_seconds", 86400)),
             args.get("budget_usd"),
+            required_checks=args.get("required_checks"),
         )
     if name == "create_task":
         return c.create_task(
@@ -702,6 +741,7 @@ def call_tool(c: Coordinator, name: str, args: dict[str, Any]) -> Any:
             kind=args.get("kind", "code"),
             checks=args.get("checks", []),
             repo_id=args.get("repo_id", ""),
+            required_checks=args.get("required_checks"),
         )
     if name == "list_tasks":
         return c.list_tasks(args.get("project_id"), args.get("status"))
@@ -786,9 +826,19 @@ def call_tool(c: Coordinator, name: str, args: dict[str, Any]) -> Any:
             args["candidate_id"], args["type"], args.get("command", ""),
             args.get("cwd", ""), args.get("exit_code"), args.get("output_ref", ""),
             args.get("sha"), args.get("execution_id"),
+            check_id=args.get("check_id", ""),
+            batch_id=args.get("batch_id"),
         )
     if name == "mark_candidate_ready":
         return c.mark_candidate_ready(args["candidate_id"])
+    if name == "begin_validation_batch":
+        return c.begin_validation_batch(
+            args["candidate_id"], args.get("reason", "")
+        )
+    if name == "candidate_gate":
+        return c.evaluate_candidate_gate(args["candidate_id"])
+    if name == "list_validation_batches":
+        return c.list_validation_batches(args["candidate_id"])
     if name == "approve_candidate":
         return c.approve_candidate(
             args["candidate_id"], args["approver"], args.get("note", "")

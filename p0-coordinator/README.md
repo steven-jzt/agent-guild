@@ -311,18 +311,28 @@ python live-demo\verify.py
 - `executions`：一次 Run 一条，带 agent/role/workspace/session/generation/status；同一任务同时只允许一个 author Run；结束状态区分 succeeded/failed/cancelled/interrupted；
 - `runs.execution_id`：遥测记录关联到具体 Run；
 - `file_reservations`：repo + Git 相对路径；父子目录冲突、大小写不敏感、全有或全无；持有到显式释放；
-- `candidates` / `evidence` / `merge_attempts`：Candidate 冻结（building → validating → awaiting_human → approved → merged），证据必须绑定 `candidate_sha` 且 `exit_code=0`，人工批准后 `start_merge` 校验 base SHA，`finish_merge` 成功才 merged；
+- `candidates` / `evidence` / `merge_attempts`：Candidate 冻结后进入验证批次；证据必须绑定 `candidate_sha` 并明确 `check_id`，当前批次内全部必需项（至少一项 test + 一项 review）有效通过才允许进入人工验收/批准；`start_merge` 校验 base SHA，`finish_merge` 成功才 merged（目标基线校验属于 P1-2，尚未修）；
 - `workspaces`：真实 `git worktree add`，记录 repo/path/branch/base_sha；`workspace_changed_files` 对比 base + 未跟踪文件；`check_workspace_scope` 检查是否越过 `file_reservations`；`commit_workspace` 提交并返回 SHA；`candidate_from_workspace` 直接生成 Candidate；
 - `tasks.lifecycle`：V1 状态机；`start_execution` → in_progress，`finish_execution(succeeded)` → auto_review，候选 ready → human_review，approve → ready_to_merge，merge succeeded → accepted；失败 → needs_fix。
 - `write_set` 与 `file_reservations` 双重门：`claim_task` / `start_execution` 都检查 repo/path 预约；冲突返回 `file_reserved_by:<task>`。
 
 还没验收：Electron 真实窗口（二进制已装，BrowserWindow 崩溃）；WebView2 壳已通过 `--smoke`；Codex App Server adapter 已接并跑通 V1 端到端。
 
+### 9.1 Candidate 证据门禁（P1-1，2026-11-09）
+
+- **必需项**：项目级 `required_checks`，默认 `platform-test(test)` + `agent-review(review)`；任务可用 `required_checks` 覆盖，但任何配置都必须至少含一项 `test` 和一项 `review`，不能退化成“只要测试成功”。
+- **验证批次**：`freeze_candidate` 自动开启批次，固化 candidate SHA、base SHA、必需项快照与 config hash；`begin_validation_batch` 可重开，旧批次标记 superseded，其证据不再参与判定。
+- **证据**：门禁证据必须带 `check_id`、绑定当前 candidate SHA、落在打开的批次内；`seq` 为批次内递增序号，判定取每个必需项最新一条（同一时间戳也按 `seq` 排序，不依赖时间）。
+- **判定**：缺失、失败（`exit_code != 0`）、错误 SHA、旧批次、必需项配置变化、批次基线变化，全部阻止；`mark_candidate_ready` 与 `approve_candidate` 共用同一门禁；进入 `awaiting_human` 之后新增有效失败结果会让后续批准再次被拒绝。
+- **迁移**：只新增列/表，不删除历史；旧证据没有 batch/check_id，保留但**不能**被视为通过；旧候选需 `begin_validation_batch` 后重新记录。
+- **CLI**：`create-project` / `create-task` 的 `--required-checks`，`record-evidence --check-id [--batch]`，另有 `begin-validation-batch`、`validation-batches`、`candidate-gate`；MCP 暴露同名工具。
+- **尚未支持**：真实 Agent 审查生产者。现有 demo/pilot 没有真实 review 证据时，会在 `mark_candidate_ready` 停止并报 `missing=agent-review`；这是预期行为，不要补假 review。
+
 ```powershell
 python v1_core_demo.py
 python candidate_demo.py
 python worktree_demo.py
-python -m unittest test_v1_core test_v1_worktree test_v1_lifecycle -v
+python -m unittest test_v1_core test_v1_worktree test_v1_lifecycle test_v1_evidence_gate -v
 ```
 
 ---

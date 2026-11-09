@@ -57,6 +57,12 @@ class GitMergeTest(unittest.TestCase):
         self.c.record_evidence(
             self.cand_id, "test", command="true", cwd=str(self.base / "wt"),
             exit_code=0, output_ref="inline", sha=self.head,
+            check_id="platform-test",
+        )
+        self.c.record_evidence(
+            self.cand_id, "review", command="controlled-test:agent-review",
+            cwd=str(self.base / "wt"), exit_code=0, output_ref="inline",
+            sha=self.head, check_id="agent-review",
         )
         self.c.mark_candidate_ready(self.cand_id)
         self.c.approve_candidate(self.cand_id, "reviewer", "ok")

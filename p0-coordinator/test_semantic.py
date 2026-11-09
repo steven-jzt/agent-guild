@@ -103,7 +103,14 @@ class SemanticTest(unittest.TestCase):
 
             c.freeze_candidate(candidate["candidate_id"])
             c.record_evidence(
-                candidate["candidate_id"], "check", exit_code=0, sha=candidate["candidate_sha"]
+                candidate["candidate_id"], "test", exit_code=0,
+                command="controlled-test:platform-test",
+                sha=candidate["candidate_sha"], check_id="platform-test",
+            )
+            c.record_evidence(
+                candidate["candidate_id"], "review", exit_code=0,
+                command="controlled-test:agent-review",
+                sha=candidate["candidate_sha"], check_id="agent-review",
             )
             c.mark_candidate_ready(candidate["candidate_id"])
             with self.assertRaises(CoordinatorError):

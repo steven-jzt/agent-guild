@@ -76,6 +76,16 @@ def run_agent(
                 check_source = "task"
                 break
 
+    # 平台测试证据必须绑定明确的必需检查项 ID（默认第一项 kind=test）。
+    platform_check_id = "platform-test"
+    try:
+        for item in coord.required_checks_for_task(task_id):
+            if item.get("kind") == "test":
+                platform_check_id = item["id"]
+                break
+    except CoordinatorError:
+        pass
+
     if not prompt:
         prompt = (
             f"Task: {task['title']}. "
@@ -169,6 +179,7 @@ def run_agent(
             cand["candidate_id"], "check", command=check, cwd=ws["path"],
             exit_code=check_exit, output_ref="inline", sha=head,
             execution_id=execution["execution_id"],
+            check_id=platform_check_id,
         )
         out["check_exit"] = check_exit
         out["check_output"] = check_output

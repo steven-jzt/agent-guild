@@ -12,6 +12,18 @@ ROOT = Path(__file__).resolve().parent
 TMP = ROOT / ".tmp"
 
 
+def record_required(c, candidate_id, sha):
+    """受控测试证据：记录平台测试 + 审查（不代表真实 Agent 审查结果）。"""
+    c.record_evidence(
+        candidate_id, "test", command="controlled-test:platform-test",
+        exit_code=0, sha=sha, check_id="platform-test",
+    )
+    c.record_evidence(
+        candidate_id, "review", command="controlled-test:agent-review",
+        exit_code=0, sha=sha, check_id="agent-review",
+    )
+
+
 class V1CoreTest(unittest.TestCase):
     def setUp(self):
         TMP.mkdir(exist_ok=True)
@@ -75,6 +87,10 @@ class V1CoreTest(unittest.TestCase):
         self.c.record_evidence(
             c["candidate_id"], "test", command="pytest", exit_code=0, sha="cand-1"
         )
+        # 无 check_id 的旧式证据不能被当成平台测试
+        with self.assertRaises(CoordinatorError):
+            self.c.mark_candidate_ready(c["candidate_id"])
+        record_required(self.c, c["candidate_id"], "cand-1")
         ready = self.c.mark_candidate_ready(c["candidate_id"])
         self.assertEqual(ready["status"], "awaiting_human")
         approved = self.c.approve_candidate(c["candidate_id"], "alice", role="admin")
@@ -86,7 +102,7 @@ class V1CoreTest(unittest.TestCase):
         done = self.c.finish_merge(attempt["attempt_id"], "succeeded", "cand-1")
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(self.c.get_candidate(c["candidate_id"])["status"], "merged")
-        self.assertEqual(len(self.c.list_evidence(c["candidate_id"])), 1)
+        self.assertEqual(len(self.c.list_evidence(c["candidate_id"])), 3)
 
     def test_approve_requires_evidence(self):
         e = self.c.start_execution(self.t1["id"], "agent-a")
@@ -96,9 +112,7 @@ class V1CoreTest(unittest.TestCase):
             author_execution_id=e["execution_id"],
         )
         self.c.freeze_candidate(c["candidate_id"])
-        self.c.record_evidence(
-            c["candidate_id"], "test", command="pytest", exit_code=0, sha="cand-1"
-        )
+        record_required(self.c, c["candidate_id"], "cand-1")
         self.c.mark_candidate_ready(c["candidate_id"])
         with self.c._conn() as conn:
             conn.execute("DELETE FROM evidence WHERE candidate_id=?", (c["candidate_id"],))
@@ -115,9 +129,7 @@ class V1CoreTest(unittest.TestCase):
             author_execution_id=e["execution_id"],
         )
         self.c.freeze_candidate(c["candidate_id"])
-        self.c.record_evidence(
-            c["candidate_id"], "test", command="pytest", exit_code=0, sha="cand-1"
-        )
+        record_required(self.c, c["candidate_id"], "cand-1")
         self.c.mark_candidate_ready(c["candidate_id"])
 
         with self.assertRaises(CoordinatorError):
@@ -143,9 +155,7 @@ class V1CoreTest(unittest.TestCase):
             author_execution_id=e["execution_id"],
         )
         self.c.freeze_candidate(c["candidate_id"])
-        self.c.record_evidence(
-            c["candidate_id"], "test", command="pytest", exit_code=0, sha="cand-1"
-        )
+        record_required(self.c, c["candidate_id"], "cand-1")
         self.c.mark_candidate_ready(c["candidate_id"])
 
         with self.assertRaises(CoordinatorError):
@@ -175,7 +185,7 @@ class V1CoreTest(unittest.TestCase):
         self.c.finish_execution(e["execution_id"], "succeeded", "done")
         c = self.c.create_candidate(self.t1["id"], "repo1", "base-1", "cand-1")
         self.c.freeze_candidate(c["candidate_id"])
-        self.c.record_evidence(c["candidate_id"], "test", exit_code=0, sha="cand-1")
+        record_required(self.c, c["candidate_id"], "cand-1")
         self.c.mark_candidate_ready(c["candidate_id"])
         self.c.approve_candidate(c["candidate_id"], "alice")
         with self.assertRaises(CoordinatorError):

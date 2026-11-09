@@ -34,10 +34,17 @@ def main() -> int:
     show("candidate created", cand)
     show("freeze", c.freeze_candidate(cand["candidate_id"]))
 
-    show("evidence (bound to cand-def)", c.record_evidence(
+    show("evidence (platform-test, bound to cand-def)", c.record_evidence(
         cand["candidate_id"], "test", command="pytest -q", exit_code=0,
         output_ref="artifacts/pytest.log", sha="cand-def",
+        check_id="platform-test",
     ))
+    gate = c.evaluate_candidate_gate(cand["candidate_id"])
+    show("gate", gate)
+    if not gate["ok"]:
+        print("\n[BLOCKED] 缺少真实 Agent 审查证据：本原型还没有审查生产者；")
+        print("          demo 不伪造 review，因此停在人工验收之前。")
+        return 0
     show("ready", c.mark_candidate_ready(cand["candidate_id"]))
     show("human approve", c.approve_candidate(cand["candidate_id"], "alice", "lgtm"))
 

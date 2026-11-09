@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -26,6 +27,13 @@ import semantic
 
 DEFAULT_TTL = 120.0
 APPROVER_ROLE_RANK = {"reviewer": 1, "admin": 2}
+# 必需检查项：至少一项 test + 一项 review。项目可增删具体项，但不能退化成只测。
+CHECK_KINDS = ("test", "review", "check")
+DEFAULT_REQUIRED_CHECKS = (
+    {"id": "platform-test", "kind": "test", "title": "平台测试"},
+    {"id": "agent-review", "kind": "review", "title": "Agent 审查"},
+)
+DEFAULT_REQUIRED_CHECKS_JSON = json.dumps(list(DEFAULT_REQUIRED_CHECKS), ensure_ascii=False)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -36,6 +44,7 @@ CREATE TABLE IF NOT EXISTS projects (
     approval_ttl_seconds REAL NOT NULL DEFAULT 86400,
     required_approver_role TEXT NOT NULL DEFAULT 'reviewer',
     approval_chain TEXT NOT NULL DEFAULT '',
+    required_checks TEXT NOT NULL DEFAULT '[{"id": "platform-test", "kind": "test", "title": "平台测试"}, {"id": "agent-review", "kind": "review", "title": "Agent 审查"}]',
     budget_usd REAL,
     created_at REAL NOT NULL
 );
@@ -53,6 +62,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     deps TEXT NOT NULL DEFAULT '[]',
     dod TEXT NOT NULL DEFAULT '',
     checks TEXT NOT NULL DEFAULT '[]',
+    required_checks TEXT NOT NULL DEFAULT '',
     priority INTEGER NOT NULL DEFAULT 0,
     plan_id TEXT,
     planned_worker TEXT,
@@ -130,6 +140,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     approver_role TEXT NOT NULL DEFAULT 'reviewer',
     approved_at REAL,
     merged_at REAL,
+    active_batch_id TEXT,
     meta TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS candidate_approvals (
@@ -180,13 +191,31 @@ CREATE TABLE IF NOT EXISTS evidence (
     id TEXT PRIMARY KEY,
     candidate_id TEXT NOT NULL,
     execution_id TEXT,
+    check_id TEXT NOT NULL DEFAULT '',
+    batch_id TEXT,
+    seq INTEGER,
     type TEXT NOT NULL,
     command TEXT NOT NULL DEFAULT '',
     cwd TEXT NOT NULL DEFAULT '',
     exit_code INTEGER,
     output_ref TEXT NOT NULL DEFAULT '',
     sha TEXT,
+    status TEXT NOT NULL DEFAULT 'valid',
     created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS validation_batches (
+    id TEXT PRIMARY KEY,
+    candidate_id TEXT NOT NULL,
+    candidate_sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    config_hash TEXT NOT NULL,
+    required_checks TEXT NOT NULL DEFAULT '[]',
+    attempt INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'open',
+    next_seq INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    closed_at REAL,
+    close_reason TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS merge_attempts (
     id TEXT PRIMARY KEY,
@@ -276,6 +305,7 @@ CREATE INDEX IF NOT EXISTS idx_file_res_repo ON file_reservations(repo_id, path_
 CREATE INDEX IF NOT EXISTS idx_file_res_task ON file_reservations(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_candidates_task ON candidates(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_evidence_candidate ON evidence(candidate_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_validation_candidate ON validation_batches(candidate_id, attempt);
 CREATE INDEX IF NOT EXISTS idx_candidate_approvals ON candidate_approvals(candidate_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_semantic_candidate ON semantic_changes(candidate_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_semantic_object ON semantic_changes(object, created_at);
@@ -316,6 +346,54 @@ def _json_load(raw: str | None, default: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return default
+
+
+def _normalize_required_checks(items: Any) -> list[dict]:
+    """校验并规范化必需检查项。
+
+    规则（P1-1）：
+    - 每项必须有稳定的 id，kind ∈ {test, review, check}；
+    - 至少一项 test、至少一项 review，避免退化成“只要测试成功”；
+    - id 全局唯一。
+    """
+    if items is None:
+        return [dict(x) for x in DEFAULT_REQUIRED_CHECKS]
+    if not isinstance(items, (list, tuple)):
+        raise CoordinatorError("required_checks must be a list")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        if isinstance(raw, str):
+            raw = {"id": raw, "kind": "test"}
+        if not isinstance(raw, dict):
+            raise CoordinatorError("required_checks items must be objects")
+        check_id = str(raw.get("id", "")).strip()
+        kind = str(raw.get("kind", "") or "test").strip()
+        if not check_id:
+            raise CoordinatorError("required check id is required")
+        if check_id in seen:
+            raise CoordinatorError(f"duplicate required check id: {check_id}")
+        if kind not in CHECK_KINDS:
+            raise CoordinatorError(f"invalid required check kind: {kind}")
+        seen.add(check_id)
+        out.append({"id": check_id, "kind": kind, "title": str(raw.get("title", "") or "")})
+    if not out:
+        raise CoordinatorError("required_checks must not be empty")
+    if not any(item["kind"] == "test" for item in out):
+        raise CoordinatorError("required_checks must include at least one test item")
+    if not any(item["kind"] == "review" for item in out):
+        raise CoordinatorError("required_checks must include at least one review item")
+    return out
+
+
+def _checks_config_hash(checks: Iterable[dict]) -> str:
+    """必需项快照指纹；只按 id/kind 排序计算，重排不改变语义。"""
+    canonical = sorted(
+        ({"id": item["id"], "kind": item["kind"]} for item in checks),
+        key=lambda item: item["id"],
+    )
+    raw = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class Coordinator:
@@ -384,6 +462,15 @@ class Coordinator:
                 conn.execute(
                     "ALTER TABLE projects ADD COLUMN approval_chain TEXT NOT NULL DEFAULT ''"
                 )
+            if "required_checks" not in pcols:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN required_checks TEXT NOT NULL DEFAULT '"
+                    + DEFAULT_REQUIRED_CHECKS_JSON + "'"
+                )
+            if "required_checks" not in cols:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN required_checks TEXT NOT NULL DEFAULT ''"
+                )
             acols = {row["name"] for row in conn.execute("PRAGMA table_info(approvals)")}
             if "expires_at" not in acols:
                 conn.execute("ALTER TABLE approvals ADD COLUMN expires_at REAL")
@@ -392,6 +479,22 @@ class Coordinator:
                 conn.execute(
                     "ALTER TABLE candidates ADD COLUMN approver_role TEXT NOT NULL DEFAULT 'reviewer'"
                 )
+            if "active_batch_id" not in ccols:
+                conn.execute("ALTER TABLE candidates ADD COLUMN active_batch_id TEXT")
+            ecols = {row["name"] for row in conn.execute("PRAGMA table_info(evidence)")}
+            for col, ddl in (
+                ("check_id", "TEXT NOT NULL DEFAULT ''"),
+                ("batch_id", "TEXT"),
+                ("seq", "INTEGER"),
+                ("status", "TEXT NOT NULL DEFAULT 'valid'"),
+            ):
+                if col not in ecols:
+                    conn.execute(f"ALTER TABLE evidence ADD COLUMN {col} {ddl}")
+            # 新列在旧库上是后加的，索引必须等 ALTER 之后再建。
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_evidence_batch "
+                "ON evidence(batch_id, check_id, seq)"
+            )
 
     # ---------- 基础设施 ----------
     @contextmanager
@@ -436,6 +539,7 @@ class Coordinator:
             "deps": _json_load(row["deps"], []),
             "dod": row["dod"],
             "checks": _json_load(row["checks"], []),
+            "required_checks": _json_load(row["required_checks"], []),
             "priority": row["priority"],
             "plan_id": row["plan_id"],
             "planned_worker": row["planned_worker"],
@@ -640,6 +744,7 @@ class Coordinator:
         budget_usd: float | None = None,
         required_approver_role: str = "reviewer",
         approval_chain: str = "",
+        required_checks: Iterable[dict] | None = None,
     ) -> dict:
         if required_approver_role not in ("reviewer", "admin"):
             raise CoordinatorError(f"invalid required approver role: {required_approver_role}")
@@ -648,6 +753,7 @@ class Coordinator:
         for item in chain_roles:
             if item not in APPROVER_ROLE_RANK:
                 raise CoordinatorError(f"invalid approval chain role: {item}")
+        checks = _normalize_required_checks(required_checks)
         pid = "P-" + uuid.uuid4().hex[:8]
         now = _now()
         approvals_required = max(1, int(approvals_required))
@@ -655,10 +761,11 @@ class Coordinator:
         budget = None if budget_usd is None else max(0.0, float(budget_usd))
         with self._tx() as conn:
             conn.execute(
-                "INSERT INTO projects(id, name, require_approval, require_verification, approvals_required, approval_ttl_seconds, required_approver_role, approval_chain, budget_usd, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO projects(id, name, require_approval, require_verification, approvals_required, approval_ttl_seconds, required_approver_role, approval_chain, required_checks, budget_usd, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (pid, name, 1 if require_approval else 0, 1 if require_verification else 0,
-                 approvals_required, approval_ttl_seconds, required_approver_role, chain, budget, now),
+                 approvals_required, approval_ttl_seconds, required_approver_role, chain,
+                 json.dumps(checks, ensure_ascii=False), budget, now),
             )
             self._event(conn, "project_created", None, "system",
                         {"project_id": pid, "name": name,
@@ -668,6 +775,7 @@ class Coordinator:
                          "approval_ttl_seconds": approval_ttl_seconds,
                          "required_approver_role": required_approver_role,
                          "approval_chain": chain_roles,
+                         "required_checks": checks,
                          "budget_usd": budget})
         return {
             "project_id": pid,
@@ -678,6 +786,7 @@ class Coordinator:
             "approval_ttl_seconds": approval_ttl_seconds,
             "required_approver_role": required_approver_role,
             "approval_chain": chain_roles,
+            "required_checks": checks,
             "budget_usd": budget,
         }
 
@@ -696,6 +805,7 @@ class Coordinator:
                 "approval_chain": [
                     x.strip() for x in (r["approval_chain"] or "").split(",") if x.strip()
                 ],
+                "required_checks": _json_load(r["required_checks"], []),
                 "budget_usd": r["budget_usd"],
                 "created_at": _iso(r["created_at"]),
             }
@@ -777,12 +887,16 @@ class Coordinator:
         kind: str = "code",
         checks: Iterable[dict] | None = None,
         repo_id: str = "",
+        required_checks: Iterable[dict] | None = None,
     ) -> dict:
         tid = "T-" + uuid.uuid4().hex[:8]
         now = _now()
         ws = list(dict.fromkeys(write_set or []))
         dp = list(dict.fromkeys(deps or []))
         ck = list(checks or [])
+        task_checks: list[dict] = []
+        if required_checks is not None:
+            task_checks = _normalize_required_checks(required_checks)
         with self._tx() as conn:
             if conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
                 raise CoordinatorError(f"unknown project: {project_id}")
@@ -790,15 +904,17 @@ class Coordinator:
                 if conn.execute("SELECT 1 FROM tasks WHERE id=?", (dep,)).fetchone() is None:
                     raise CoordinatorError(f"unknown dependency: {dep}")
             conn.execute(
-                "INSERT INTO tasks(id, project_id, title, description, kind, status, repo_id, write_set, deps, dod, checks, priority, created_at, updated_at) "
-                "VALUES (?,?,?,?,?, 'ready', ?,?,?,?,?,?,?,?)",
+                "INSERT INTO tasks(id, project_id, title, description, kind, status, repo_id, write_set, deps, dod, checks, required_checks, priority, created_at, updated_at) "
+                "VALUES (?,?,?,?,?, 'ready', ?,?,?,?,?,?,?,?,?)",
                 (tid, project_id, title, description, kind, repo_id, json.dumps(ws, ensure_ascii=False),
                  json.dumps(dp, ensure_ascii=False), dod, json.dumps(ck, ensure_ascii=False),
+                 json.dumps(task_checks, ensure_ascii=False) if task_checks else "",
                  int(priority), now, now),
             )
             self._event(conn, "task_created", tid, "system",
                         {"project_id": project_id, "title": title, "kind": kind,
-                         "write_set": ws, "deps": dp, "checks": len(ck), "repo_id": repo_id})
+                         "write_set": ws, "deps": dp, "checks": len(ck),
+                         "required_checks": task_checks, "repo_id": repo_id})
         return self.get_task(tid)
 
     def get_task(self, task_id: str) -> dict:
@@ -1556,6 +1672,7 @@ class Coordinator:
             "approver_role": row["approver_role"],
             "approved_at": _iso(row["approved_at"]),
             "merged_at": _iso(row["merged_at"]),
+            "active_batch_id": row["active_batch_id"],
             "meta": _json_load(row["meta"], {}),
         }
 
@@ -1565,12 +1682,16 @@ class Coordinator:
             "evidence_id": row["id"],
             "candidate_id": row["candidate_id"],
             "execution_id": row["execution_id"],
+            "check_id": row["check_id"],
+            "batch_id": row["batch_id"],
+            "seq": row["seq"],
             "type": row["type"],
             "command": row["command"],
             "cwd": row["cwd"],
             "exit_code": row["exit_code"],
             "output_ref": row["output_ref"],
             "sha": row["sha"],
+            "status": row["status"],
             "created_at": _iso(row["created_at"]),
         }
 
@@ -1666,7 +1787,21 @@ class Coordinator:
         output_ref: str = "",
         sha: str | None = None,
         execution_id: str | None = None,
+        check_id: str = "",
+        batch_id: str | None = None,
+        status: str = "valid",
     ) -> dict:
+        """记录证据。
+
+        - 带 check_id 的证据属于门禁证据：必须绑定当前 candidate SHA，并落在打开的验证批次；
+        - 不带 check_id 的证据只作记录，不能替代必需检查；
+        - status='void' 表示该条结果作废，不参与门禁。
+        """
+        if status not in ("valid", "void"):
+            raise CoordinatorError(f"invalid evidence status: {status}")
+        check_id = (check_id or "").strip()
+        if batch_id and not check_id:
+            raise CoordinatorError("batch_id requires check_id")
         now = _now()
         with self._tx() as conn:
             candidate = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
@@ -1678,23 +1813,61 @@ class Coordinator:
                 execution = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
                 if execution is None:
                     raise CoordinatorError(f"unknown execution: {execution_id}")
+            batch = None
+            seq = None
+            if check_id:
+                if not sha:
+                    raise CoordinatorError("evidence for a check must bind candidate SHA")
+                if sha != candidate["candidate_sha"]:
+                    raise CoordinatorError(
+                        "evidence SHA does not match candidate SHA: "
+                        f"{sha} != {candidate['candidate_sha']}"
+                    )
+                if batch_id:
+                    batch = conn.execute(
+                        "SELECT * FROM validation_batches WHERE id=? AND candidate_id=?",
+                        (batch_id, candidate_id),
+                    ).fetchone()
+                    if batch is None:
+                        raise CoordinatorError(f"unknown validation batch for candidate: {batch_id}")
+                    if batch["status"] != "open":
+                        raise CoordinatorError(f"validation batch is not open: {batch['status']}")
+                else:
+                    batch = self._active_batch_row(conn, candidate)
+                    if batch is None:
+                        raise CoordinatorError(
+                            "candidate has no active validation batch; call begin_validation_batch"
+                        )
+                if batch["candidate_sha"] != candidate["candidate_sha"]:
+                    raise CoordinatorError("validation batch belongs to another candidate SHA")
+                seq = int(batch["next_seq"]) + 1
+                conn.execute(
+                    "UPDATE validation_batches SET next_seq=? WHERE id=?", (seq, batch["id"])
+                )
             evidence_id = "EV-" + uuid.uuid4().hex[:8]
             conn.execute(
-                "INSERT INTO evidence(id, candidate_id, execution_id, type, command, cwd, "
-                "exit_code, output_ref, sha, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (evidence_id, candidate_id, execution_id, type, command, cwd,
-                 exit_code, output_ref, sha, now),
+                "INSERT INTO evidence(id, candidate_id, execution_id, check_id, batch_id, seq, "
+                "type, command, cwd, exit_code, output_ref, sha, status, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (evidence_id, candidate_id, execution_id, check_id,
+                 batch["id"] if batch is not None else None, seq, type, command, cwd,
+                 exit_code, output_ref, sha, status, now),
             )
             self._event(conn, "evidence_recorded", candidate["task_id"], "system",
                         {"evidence_id": evidence_id, "candidate_id": candidate_id,
-                         "type": type, "exit_code": exit_code, "sha": sha})
+                         "check_id": check_id,
+                         "batch_id": batch["id"] if batch is not None else None,
+                         "seq": seq, "type": type, "exit_code": exit_code,
+                         "sha": sha, "status": status})
             row = conn.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
             return self._evidence(row)
 
     def list_evidence(self, candidate_id: str) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM evidence WHERE candidate_id=? ORDER BY created_at", (candidate_id,)
+                "SELECT * FROM evidence WHERE candidate_id=? "
+                "ORDER BY created_at, COALESCE(seq, 0), id",
+                (candidate_id,),
             ).fetchall()
         return [self._evidence(row) for row in rows]
 
@@ -1900,6 +2073,235 @@ class Coordinator:
             for r in rows
         ]
 
+    # ---------- Candidate 证据门禁（P1-1） ----------
+    @staticmethod
+    def _batch(row: sqlite3.Row) -> dict:
+        return {
+            "batch_id": row["id"],
+            "candidate_id": row["candidate_id"],
+            "candidate_sha": row["candidate_sha"],
+            "base_sha": row["base_sha"],
+            "config_hash": row["config_hash"],
+            "required_checks": _json_load(row["required_checks"], []),
+            "attempt": row["attempt"],
+            "status": row["status"],
+            "next_seq": row["next_seq"],
+            "created_at": _iso(row["created_at"]),
+            "closed_at": _iso(row["closed_at"]),
+            "close_reason": row["close_reason"],
+        }
+
+    @staticmethod
+    def _required_checks_for_task(conn: sqlite3.Connection, task_id: str) -> list[dict]:
+        row = conn.execute(
+            "SELECT t.required_checks AS task_checks, p.required_checks AS project_checks "
+            "FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise CoordinatorError(f"unknown task: {task_id}")
+        raw = row["task_checks"] or row["project_checks"]
+        return _normalize_required_checks(_json_load(raw, DEFAULT_REQUIRED_CHECKS))
+
+    def required_checks_for_task(self, task_id: str) -> list[dict]:
+        """任务实际生效的必需检查项（任务覆盖项目，缺省为 test + review）。"""
+        with self._conn() as conn:
+            return self._required_checks_for_task(conn, task_id)
+
+    def _create_batch(
+        self,
+        conn: sqlite3.Connection,
+        candidate: sqlite3.Row,
+        checks: list[dict],
+        reason: str,
+    ) -> sqlite3.Row:
+        now = _now()
+        attempt = conn.execute(
+            "SELECT COALESCE(MAX(attempt), 0) + 1 AS a FROM validation_batches WHERE candidate_id=?",
+            (candidate["id"],),
+        ).fetchone()["a"]
+        batch_id = "VB-" + uuid.uuid4().hex[:8]
+        conn.execute(
+            "INSERT INTO validation_batches(id, candidate_id, candidate_sha, base_sha, config_hash, "
+            "required_checks, attempt, status, next_seq, created_at) "
+            "VALUES (?,?,?,?,?,?,?, 'open', 0, ?)",
+            (batch_id, candidate["id"], candidate["candidate_sha"], candidate["base_sha"],
+             _checks_config_hash(checks), json.dumps(checks, ensure_ascii=False), attempt, now),
+        )
+        conn.execute(
+            "UPDATE candidates SET active_batch_id=? WHERE id=?", (batch_id, candidate["id"])
+        )
+        self._event(conn, "validation_batch_started", candidate["task_id"], "system",
+                    {"candidate_id": candidate["id"], "batch_id": batch_id, "attempt": attempt,
+                     "candidate_sha": candidate["candidate_sha"], "base_sha": candidate["base_sha"],
+                     "required_checks": checks, "reason": reason})
+        return conn.execute(
+            "SELECT * FROM validation_batches WHERE id=?", (batch_id,)
+        ).fetchone()
+
+    def _active_batch_row(
+        self, conn: sqlite3.Connection, candidate: sqlite3.Row
+    ) -> sqlite3.Row | None:
+        if candidate["active_batch_id"]:
+            row = conn.execute(
+                "SELECT * FROM validation_batches WHERE id=?", (candidate["active_batch_id"],)
+            ).fetchone()
+            if row is not None:
+                return row
+        return conn.execute(
+            "SELECT * FROM validation_batches WHERE candidate_id=? AND status='open' "
+            "ORDER BY attempt DESC LIMIT 1",
+            (candidate["id"],),
+        ).fetchone()
+
+    def begin_validation_batch(self, candidate_id: str, reason: str = "") -> dict:
+        """为候选开启新的验证批次；旧批次被标记 superseded，其证据不再参与门禁。"""
+        with self._tx() as conn:
+            candidate = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
+            if candidate is None:
+                raise CoordinatorError(f"unknown candidate: {candidate_id}")
+            if candidate["status"] in ("approved", "merged", "rejected", "invalidated"):
+                raise CoordinatorError(f"candidate is already {candidate['status']}")
+            checks = self._required_checks_for_task(conn, candidate["task_id"])
+            now = _now()
+            conn.execute(
+                "UPDATE validation_batches SET status='superseded', closed_at=?, close_reason=? "
+                "WHERE candidate_id=? AND status='open'",
+                (now, reason or "superseded", candidate_id),
+            )
+            row = self._create_batch(conn, candidate, checks, reason or "manual")
+            return self._batch(row)
+
+    def list_validation_batches(self, candidate_id: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM validation_batches WHERE candidate_id=? ORDER BY attempt",
+                (candidate_id,),
+            ).fetchall()
+        return [self._batch(row) for row in rows]
+
+    def set_required_checks(self, project_id: str, required_checks: Iterable[dict]) -> dict:
+        """更新项目必需项；已有批次的 config_hash 会失配，需重新开批次。"""
+        checks = _normalize_required_checks(required_checks)
+        with self._tx() as conn:
+            if conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+                raise CoordinatorError(f"unknown project: {project_id}")
+            conn.execute(
+                "UPDATE projects SET required_checks=? WHERE id=?",
+                (json.dumps(checks, ensure_ascii=False), project_id),
+            )
+            self._event(conn, "required_checks_updated", None, "system",
+                        {"project_id": project_id, "required_checks": checks})
+        return {"project_id": project_id, "required_checks": checks}
+
+    def void_evidence(self, evidence_id: str, reason: str = "") -> dict:
+        """把一条证据标记为 void；门禁只认 status='valid' 的最新结果。"""
+        with self._tx() as conn:
+            row = conn.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
+            if row is None:
+                raise CoordinatorError(f"unknown evidence: {evidence_id}")
+            if row["status"] != "void":
+                conn.execute("UPDATE evidence SET status='void' WHERE id=?", (evidence_id,))
+                candidate = conn.execute(
+                    "SELECT task_id FROM candidates WHERE id=?", (row["candidate_id"],)
+                ).fetchone()
+                self._event(conn, "evidence_voided", candidate["task_id"] if candidate else None,
+                            "system", {"evidence_id": evidence_id,
+                                       "candidate_id": row["candidate_id"], "reason": reason})
+            updated = conn.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
+            return self._evidence(updated)
+
+    @staticmethod
+    def _gate_error(gate: dict) -> str:
+        parts = []
+        if gate["stale"]:
+            parts.append("stale=" + ",".join(gate["stale"]))
+        if gate["missing"]:
+            parts.append("missing=" + ",".join(gate["missing"]))
+        if gate["failed"]:
+            parts.append("failed=" + ",".join(gate["failed"]))
+        if not parts:
+            parts.append(gate.get("reason") or "required checks not satisfied")
+        return "candidate gate failed: " + "; ".join(parts)
+
+    def evaluate_candidate_gate(self, candidate_id: str) -> dict:
+        """只读评估：当前候选的必需检查是否全部有效通过。"""
+        with self._conn() as conn:
+            return self._evaluate_gate(conn, candidate_id)
+
+    def _evaluate_gate(self, conn: sqlite3.Connection, candidate_id: str) -> dict:
+        candidate = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
+        if candidate is None:
+            raise CoordinatorError(f"unknown candidate: {candidate_id}")
+        checks = self._required_checks_for_task(conn, candidate["task_id"])
+        batch = self._active_batch_row(conn, candidate)
+        result: dict[str, Any] = {
+            "candidate_id": candidate_id,
+            "candidate_sha": candidate["candidate_sha"],
+            "base_sha": candidate["base_sha"],
+            "batch_id": batch["id"] if batch is not None else None,
+            "batch_attempt": batch["attempt"] if batch is not None else None,
+            "batch_status": batch["status"] if batch is not None else None,
+            "required_checks": checks,
+            "items": [],
+            "missing": [],
+            "failed": [],
+            "stale": [],
+            "ok": False,
+            "reason": "",
+        }
+        if batch is None:
+            result["missing"] = [item["id"] for item in checks]
+            result["items"] = [
+                {"id": item["id"], "kind": item["kind"], "status": "missing",
+                 "reason": "no active validation batch"}
+                for item in checks
+            ]
+            result["reason"] = "no active validation batch; call begin_validation_batch"
+            return result
+
+        stale = result["stale"]
+        if batch["status"] != "open":
+            stale.append(f"batch_status={batch['status']}")
+        if batch["candidate_sha"] != candidate["candidate_sha"]:
+            stale.append("candidate_sha_changed")
+        if batch["base_sha"] != candidate["base_sha"]:
+            stale.append("base_sha_changed")
+        if batch["config_hash"] != _checks_config_hash(checks):
+            stale.append("required_checks_changed")
+
+        for item in checks:
+            row = conn.execute(
+                "SELECT * FROM evidence WHERE candidate_id=? AND batch_id=? AND check_id=? "
+                "AND status='valid' ORDER BY seq DESC, id DESC LIMIT 1",
+                (candidate_id, batch["id"], item["id"]),
+            ).fetchone()
+            entry: dict[str, Any] = {
+                "id": item["id"], "kind": item["kind"], "status": "missing",
+                "evidence_id": None, "exit_code": None, "sha": None, "reason": "",
+            }
+            if row is None:
+                result["missing"].append(item["id"])
+                entry["reason"] = "no evidence in current batch"
+            else:
+                entry.update(evidence_id=row["id"], exit_code=row["exit_code"], sha=row["sha"])
+                if row["sha"] != candidate["candidate_sha"]:
+                    entry["status"] = "invalid_sha"
+                    entry["reason"] = "evidence is bound to another candidate SHA"
+                    result["missing"].append(item["id"])
+                elif row["exit_code"] is None or int(row["exit_code"]) != 0:
+                    entry["status"] = "failed"
+                    entry["reason"] = f"exit_code={row['exit_code']}"
+                    result["failed"].append(item["id"])
+                else:
+                    entry["status"] = "passed"
+            result["items"].append(entry)
+
+        result["ok"] = not stale and not result["missing"] and not result["failed"]
+        if not result["ok"]:
+            result["reason"] = "required checks not satisfied"
+        return result
+
     def freeze_candidate(self, candidate_id: str) -> dict:
         now = _now()
         with self._tx() as conn:
@@ -1912,10 +2314,15 @@ class Coordinator:
                 "UPDATE candidates SET status='validating', frozen_at=? WHERE id=?",
                 (now, candidate_id),
             )
+            checks = self._required_checks_for_task(conn, candidate["task_id"])
+            batch = self._create_batch(conn, candidate, checks, "candidate_frozen")
             self._event(conn, "candidate_frozen", candidate["task_id"], "system",
-                        {"candidate_id": candidate_id, "candidate_sha": candidate["candidate_sha"]})
+                        {"candidate_id": candidate_id, "candidate_sha": candidate["candidate_sha"],
+                         "batch_id": batch["id"]})
             row = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
-            return self._candidate(row)
+            result = self._candidate(row)
+            result["validation_batch"] = self._batch(batch)
+            return result
 
     def mark_candidate_ready(self, candidate_id: str) -> dict:
         with self._tx() as conn:
@@ -1924,16 +2331,15 @@ class Coordinator:
                 raise CoordinatorError(f"unknown candidate: {candidate_id}")
             if candidate["status"] != "validating":
                 raise CoordinatorError(f"candidate is not validating: {candidate['status']}")
-            ok = conn.execute(
-                "SELECT 1 FROM evidence WHERE candidate_id=? AND sha=? AND exit_code=0 LIMIT 1",
-                (candidate_id, candidate["candidate_sha"]),
-            ).fetchone()
-            if ok is None:
-                raise CoordinatorError("candidate needs passing evidence bound to candidate_sha")
+            gate = self._evaluate_gate(conn, candidate_id)
+            if not gate["ok"]:
+                raise CoordinatorError(self._gate_error(gate))
             conn.execute("UPDATE candidates SET status='awaiting_human' WHERE id=?", (candidate_id,))
             self._transition_in_tx(conn, candidate["task_id"], "human_review", "candidate_ready")
             self._event(conn, "candidate_ready", candidate["task_id"], "system",
-                        {"candidate_id": candidate_id, "candidate_sha": candidate["candidate_sha"]})
+                        {"candidate_id": candidate_id, "candidate_sha": candidate["candidate_sha"],
+                         "batch_id": gate["batch_id"],
+                         "required_checks": [item["id"] for item in gate["items"]]})
             row = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
             return self._candidate(row)
 
@@ -1949,12 +2355,10 @@ class Coordinator:
                 raise CoordinatorError(f"unknown candidate: {candidate_id}")
             if candidate["status"] != "awaiting_human":
                 raise CoordinatorError(f"candidate is not awaiting human: {candidate['status']}")
-            evidence = conn.execute(
-                "SELECT 1 FROM evidence WHERE candidate_id=? AND sha=? AND exit_code=0 LIMIT 1",
-                (candidate_id, candidate["candidate_sha"]),
-            ).fetchone()
-            if evidence is None:
-                raise CoordinatorError("candidate has no passing evidence bound to candidate_sha")
+            # 与 mark_candidate_ready 共用同一门禁；进入 awaiting_human 之后新增的有效失败同样会阻止批准。
+            gate = self._evaluate_gate(conn, candidate_id)
+            if not gate["ok"]:
+                raise CoordinatorError(self._gate_error(gate))
 
             chain = self._approval_chain_for_task(conn, candidate["task_id"])
             breaking = conn.execute(
@@ -2009,6 +2413,11 @@ class Coordinator:
                 "UPDATE candidates SET status='approved', approved_by=?, approver_role=?, approved_at=? WHERE id=?",
                 (approver, role, now, candidate_id),
             )
+            conn.execute(
+                "UPDATE validation_batches SET status='closed', closed_at=?, close_reason='candidate_approved' "
+                "WHERE candidate_id=? AND status='open'",
+                (now, candidate_id),
+            )
             self._transition_in_tx(conn, candidate["task_id"], "ready_to_merge", "candidate_approved")
             self._event(conn, "candidate_approved", candidate["task_id"], approver,
                         {"candidate_id": candidate_id, "candidate_sha": candidate["candidate_sha"],
@@ -2027,6 +2436,11 @@ class Coordinator:
             if candidate["status"] not in ("validating", "awaiting_human"):
                 raise CoordinatorError(f"candidate cannot be rejected: {candidate['status']}")
             conn.execute("UPDATE candidates SET status='rejected' WHERE id=?", (candidate_id,))
+            conn.execute(
+                "UPDATE validation_batches SET status='closed', closed_at=?, close_reason='candidate_rejected' "
+                "WHERE candidate_id=? AND status='open'",
+                (_now(), candidate_id),
+            )
             self._transition_in_tx(conn, candidate["task_id"], "needs_fix", "candidate_rejected")
             self._event(conn, "candidate_rejected", candidate["task_id"], approver,
                         {"candidate_id": candidate_id, "reason": reason})
@@ -2041,6 +2455,11 @@ class Coordinator:
             if candidate["status"] == "merged":
                 raise CoordinatorError("merged candidate cannot be invalidated")
             conn.execute("UPDATE candidates SET status='invalidated' WHERE id=?", (candidate_id,))
+            conn.execute(
+                "UPDATE validation_batches SET status='superseded', closed_at=?, "
+                "close_reason='candidate_invalidated' WHERE candidate_id=? AND status='open'",
+                (_now(), candidate_id),
+            )
             try:
                 self._transition_in_tx(conn, candidate["task_id"], "needs_fix", "candidate_invalidated")
             except CoordinatorError:
