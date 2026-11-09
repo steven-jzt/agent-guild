@@ -754,6 +754,89 @@ class ApprovalMigrationTest(unittest.TestCase):
         Coordinator(self.db)
         self.assertEqual(self.approval_count(), 2)
 
+    def test_half_migration_content_conflict_blocks_without_overwrite(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "original-human", "reviewer", "original-note", 1.0),
+            ("CA-2", "C-2", "second-human", "admin", "second-note", 2.0),
+        ])
+        self.make_half_migrated(["CA-1"])
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute(
+                "UPDATE candidate_approvals SET approver=?, note=? WHERE id='CA-1'",
+                ("different-human", "different-note"),
+            )
+            conn.commit()
+
+        with self.assertRaisesRegex(CoordinatorError, "conflict"):
+            Coordinator(self.db)
+        self.assertIn("candidate_approvals_legacy", self.tables())
+        with closing(sqlite3.connect(self.db)) as conn:
+            legacy = conn.execute(
+                "SELECT approver, note FROM candidate_approvals_legacy WHERE id='CA-1'"
+            ).fetchone()
+            target = conn.execute(
+                "SELECT approver, note, batch_id FROM candidate_approvals WHERE id='CA-1'"
+            ).fetchone()
+        self.assertEqual(legacy, ("original-human", "original-note"))
+        self.assertEqual(target[0], "different-human")
+        self.assertEqual(target[1], "different-note")
+        self.assertIsNone(target[2])
+        self.assertEqual(self.approval_count(), 1)
+
+        # 人工对齐内容后可以重试，历史不丢
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute(
+                "UPDATE candidate_approvals SET approver=?, note=? WHERE id='CA-1'",
+                ("original-human", "original-note"),
+            )
+            conn.commit()
+        core = Coordinator(self.db)
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+        self.assertEqual(self.approval_count(), 2)
+        self.assertEqual(
+            core.list_candidate_approvals("C-1")[0]["approver"], "original-human"
+        )
+
+    def test_half_migration_batch_id_conflict_blocks(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "human-1", "reviewer", "keep", 1.0),
+        ])
+        self.make_half_migrated(["CA-1"])
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute(
+                "UPDATE candidate_approvals SET batch_id='VB-other' WHERE id='CA-1'"
+            )
+            conn.commit()
+
+        with self.assertRaisesRegex(CoordinatorError, "conflict"):
+            Coordinator(self.db)
+        self.assertIn("candidate_approvals_legacy", self.tables())
+        with closing(sqlite3.connect(self.db)) as conn:
+            target = conn.execute(
+                "SELECT batch_id FROM candidate_approvals WHERE id='CA-1'"
+            ).fetchone()
+        self.assertEqual(target[0], "VB-other")
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute("UPDATE candidate_approvals SET batch_id=NULL WHERE id='CA-1'")
+            conn.commit()
+        core = Coordinator(self.db)
+        self.assertNotIn("candidate_approvals_legacy", self.tables())
+        self.assertIsNone(core.list_candidate_approvals("C-1")[0]["batch_id"])
+
+    def test_half_migration_full_identical_copy_is_idempotent(self):
+        self.seed_legacy([
+            ("CA-1", "C-1", "human-1", "reviewer", "keep-1", 1.0),
+            ("CA-2", "C-2", "human-2", "admin", "keep-2", 2.0),
+        ])
+        self.make_half_migrated(["CA-1", "CA-2"])
+        for _ in range(2):
+            core = Coordinator(self.db)
+            self.assertEqual(core.list_candidate_approvals("C-1")[0]["approver"], "human-1")
+            self.assertEqual(core.list_candidate_approvals("C-2")[0]["approver"], "human-2")
+            self.assertNotIn("candidate_approvals_legacy", self.tables())
+            self.assertEqual(self.approval_count(), 2)
+
     def test_half_migrated_copy_failure_blocks_then_recovers(self):
         self.seed_legacy([
             ("CA-1", "C-1", "human-1", "reviewer", "keep", 1.0),

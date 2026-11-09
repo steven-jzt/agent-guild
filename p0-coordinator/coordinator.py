@@ -600,6 +600,26 @@ class Coordinator:
                     "candidate_approvals migration incomplete: "
                     f"{missing} legacy row(s) missing from the target table"
                 )
+            # 只比较 ID 会把“目标已有一条同 ID 但内容不同”的行当成已复制。
+            # 删除 legacy 之前逐字段核对，冲突时保留两表并报错，不自动覆盖。
+            conflicts = conn.execute(
+                "SELECT l.id AS id FROM candidate_approvals_legacy l "
+                "JOIN candidate_approvals n ON n.id = l.id "
+                "WHERE n.batch_id IS NOT NULL "
+                "   OR n.candidate_id IS NOT l.candidate_id "
+                "   OR n.approver IS NOT l.approver "
+                "   OR n.role IS NOT l.role "
+                "   OR n.note IS NOT l.note "
+                "   OR n.created_at IS NOT l.created_at "
+                "ORDER BY l.id LIMIT 5"
+            ).fetchall()
+            if conflicts:
+                ids = ", ".join(row["id"] for row in conflicts)
+                raise CoordinatorError(
+                    "candidate_approvals migration conflict: target rows differ from "
+                    f"legacy history for id(s) {ids}; both tables were preserved, "
+                    "reconcile manually before retrying"
+                )
             conn.execute("DROP TABLE candidate_approvals_legacy")
         elif "batch_id" not in cols:
             conn.execute(

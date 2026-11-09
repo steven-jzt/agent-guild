@@ -327,7 +327,7 @@ python live-demo\verify.py
 - **作废语义**：`void_evidence` 只作废单条记录；如果被作废的是该检查项的最新结果，则该项进入等待重新验证状态，**不会**回退到更早的成功记录，必须记录新的有效结果才能恢复。
 - **判定**：缺失、失败（`exit_code != 0`）、错误 SHA、类别不匹配、最新结果作废、旧批次、必需项配置变化、批次基线变化，全部阻止；`mark_candidate_ready` 与 `approve_candidate` 共用同一门禁；进入 `awaiting_human` 之后新增有效失败结果会让后续批准再次被拒绝。
 - **审批批次**：`candidate_approvals` 绑定验证批次；新批次必须重新完成整条审批链，旧批次的部分批准只保留审计历史、不再计数。
-- **迁移**：旧库只新增列/表并把 `candidate_approvals` 重建为带 `batch_id` 的结构；重建全过程在显式事务中执行，任一步失败都会回滚并抛出错误，不会留下“新表已建、旧行留在 legacy 表”的半迁移状态。启动时若发现 `candidate_approvals_legacy` 残留，会先补齐缺失历史行并校验，再删除 legacy；无法安全判定（legacy 与旧结构目标表并存）时明确报错阻塞。历史证据与批准不删除，但旧证据（无 batch/check_id）和旧批准（batch_id 为 NULL）都不能满足新批次，旧候选需 `begin_validation_batch` 后重新记录与审批。
+- **迁移**：旧库只新增列/表并把 `candidate_approvals` 重建为带 `batch_id` 的结构；重建全过程在显式事务中执行，任一步失败都会回滚并抛出错误，不会留下“新表已建、旧行留在 legacy 表”的半迁移状态。启动时若发现 `candidate_approvals_legacy` 残留，会先补齐缺失历史行，再逐字段核对（id、candidate_id、approver、role、note、created_at，且目标行 `batch_id` 必须为 NULL）；同 ID 内容不一致时明确报错、回滚并保留两表，不自动覆盖或选边。无法安全判定（legacy 与旧结构目标表并存）时明确报错阻塞。历史证据与批准不删除，但旧证据（无 batch/check_id）和旧批准（batch_id 为 NULL）都不能满足新批次，旧候选需 `begin_validation_batch` 后重新记录与审批。
 - **CLI**：`create-project` / `create-task` 的 `--required-checks`，`record-evidence --check-id [--batch]`，另有 `begin-validation-batch`、`validation-batches`、`candidate-gate`；MCP 暴露同名工具。
 - **尚未支持**：真实 Agent 审查生产者。现有 demo/pilot 没有真实 review 证据时，会在 `mark_candidate_ready` 停止并报 `missing=agent-review`；这是预期行为，不要补假 review。
 
