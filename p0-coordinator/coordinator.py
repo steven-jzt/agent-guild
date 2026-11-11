@@ -222,6 +222,10 @@ CREATE TABLE IF NOT EXISTS merge_attempts (
     id TEXT PRIMARY KEY,
     candidate_id TEXT NOT NULL,
     expected_base_sha TEXT NOT NULL,
+    repo_path TEXT NOT NULL DEFAULT '',
+    target_ref TEXT NOT NULL DEFAULT '',
+    target_before_sha TEXT NOT NULL DEFAULT '',
+    target_after_sha TEXT NOT NULL DEFAULT '',
     requested_by TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     result_sha TEXT NOT NULL DEFAULT '',
@@ -536,6 +540,15 @@ class Coordinator:
             ):
                 if col not in ecols:
                     conn.execute(f"ALTER TABLE evidence ADD COLUMN {col} {ddl}")
+            mcols = {row["name"] for row in conn.execute("PRAGMA table_info(merge_attempts)")}
+            for col, ddl in (
+                ("repo_path", "TEXT NOT NULL DEFAULT ''"),
+                ("target_ref", "TEXT NOT NULL DEFAULT ''"),
+                ("target_before_sha", "TEXT NOT NULL DEFAULT ''"),
+                ("target_after_sha", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if col not in mcols:
+                    conn.execute(f"ALTER TABLE merge_attempts ADD COLUMN {col} {ddl}")
             # 新列在旧库上是后加的，索引必须等 ALTER 之后再建。
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_evidence_batch "
@@ -1873,6 +1886,10 @@ class Coordinator:
             "attempt_id": row["id"],
             "candidate_id": row["candidate_id"],
             "expected_base_sha": row["expected_base_sha"],
+            "repo_path": row["repo_path"],
+            "target_ref": row["target_ref"],
+            "target_before_sha": row["target_before_sha"],
+            "target_after_sha": row["target_after_sha"],
             "requested_by": row["requested_by"],
             "status": row["status"],
             "result_sha": row["result_sha"],
@@ -2681,12 +2698,159 @@ class Coordinator:
             row = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
             return self._candidate(row)
 
+    def _candidate_repo_path(
+        self, conn: sqlite3.Connection, candidate: sqlite3.Row, repo_path: str | None = None,
+    ) -> Path:
+        """解析候选所属仓库的顶层路径；优先显式路径，其次最近的工作区。"""
+        if repo_path:
+            candidate_path = Path(repo_path).expanduser().resolve()
+        else:
+            row = conn.execute(
+                "SELECT repo_path FROM workspaces WHERE task_id=? AND repo_id=? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (candidate["task_id"], candidate["repo_id"]),
+            ).fetchone()
+            if row is None:
+                raise CoordinatorError(
+                    "repo_path required: candidate has no workspace with a repo path"
+                )
+            candidate_path = Path(row["repo_path"]).resolve()
+        if not candidate_path.is_dir():
+            raise CoordinatorError(f"repo path not found: {candidate_path}")
+        try:
+            top = self._git(candidate_path, "rev-parse", "--show-toplevel").stdout.strip()
+        except CoordinatorError as exc:
+            raise CoordinatorError(f"not a git repository: {candidate_path}") from exc
+        return Path(top).resolve()
+
+    def _resolve_local_target(self, repo_dir: Path, target_ref: str) -> tuple[str, str]:
+        """把 target_ref 解析成本地分支的完整 ref 和当前 HEAD SHA。
+
+        只接受本地分支或 HEAD；远程跟踪分支、tag 和 detached HEAD 都拒绝，
+        避免 finish_merge 往一个不可写的 ref 上校验或更新。
+        """
+        ref = (target_ref or "HEAD").strip()
+        if not ref:
+            raise CoordinatorError("target_ref must not be empty")
+        try:
+            full = self._git(repo_dir, "rev-parse", "--symbolic-full-name", ref).stdout.strip()
+        except CoordinatorError as exc:
+            raise CoordinatorError(f"target ref not found: {ref}") from exc
+        if full == "HEAD":
+            branch = self._git(
+                repo_dir, "symbolic-ref", "--short", "-q", "HEAD", check=False
+            ).stdout.strip()
+            if not branch:
+                raise CoordinatorError("target ref HEAD is detached; specify a local branch")
+            full = f"refs/heads/{branch}"
+        if not full.startswith("refs/heads/"):
+            raise CoordinatorError(f"target ref must be a local branch or HEAD: {ref}")
+        sha = self._git(repo_dir, "rev-parse", "--verify", f"{full}^{{commit}}").stdout.strip()
+        return full, sha
+
+    def _advance_target_ref(self, attempt: sqlite3.Row, result_sha: str) -> str:
+        """把目标分支推进到 result_sha，并返回实际观察到的目标 HEAD。
+
+        只允许 fast-forward；如果目标分支在候选生成/开始合入后前进过，或者
+        结果 SHA 不是目标基线的后代，直接拒绝，不能把“临时分支成功”当成合入。
+        """
+        repo_path = attempt["repo_path"]
+        target_ref = attempt["target_ref"]
+        before = attempt["target_before_sha"]
+        if not repo_path or not target_ref or not before:
+            raise CoordinatorError(
+                "merge attempt has no target repo/ref/base; cannot verify target branch"
+            )
+        if not result_sha:
+            raise CoordinatorError("result_sha is required for a succeeded merge")
+        if result_sha == before:
+            raise CoordinatorError("target branch did not change; refusing to mark merged")
+
+        repo_dir = Path(repo_path).resolve()
+        full, actual = self._resolve_local_target(repo_dir, target_ref)
+        if full != target_ref:
+            raise CoordinatorError(f"target ref changed: {target_ref} -> {full}")
+        if actual != before and actual != result_sha:
+            raise CoordinatorError(
+                f"target branch moved during merge: expected {before}, found {actual}"
+            )
+
+        try:
+            self._git(repo_dir, "cat-file", "-e", f"{result_sha}^{{commit}}")
+            ancestor = self._git(
+                repo_dir, "merge-base", "--is-ancestor", before, result_sha, check=False
+            )
+        except CoordinatorError as exc:
+            raise CoordinatorError(f"invalid merge result: {exc}") from exc
+        if ancestor.returncode != 0:
+            raise CoordinatorError("merge result is not a descendant of the target base")
+        if actual == result_sha:
+            return actual
+
+        current = self._git(
+            repo_dir, "symbolic-ref", "--short", "-q", "HEAD", check=False
+        ).stdout.strip()
+        if current and f"refs/heads/{current}" == full:
+            # 目标分支已检出：用 ff-only merge 同时更新工作树和分支。
+            self._git(repo_dir, "merge", "--ff-only", result_sha)
+        else:
+            # 目标分支未检出：用 compare-and-swap 更新 ref，避免覆盖并发前进。
+            self._git(repo_dir, "update-ref", full, result_sha, before)
+
+        _, after = self._resolve_local_target(repo_dir, full)
+        if after != result_sha:
+            raise CoordinatorError(
+                f"target ref {full} is {after} after merge; expected {result_sha}"
+            )
+        return after
+
+    def _fail_merge_attempt(self, attempt_id: str, result_sha: str, error: str) -> dict:
+        """合入校验失败：记录 failed，任务退回 needs_fix，目标分支不动。"""
+        now = _now()
+        with self._tx() as conn:
+            attempt = conn.execute("SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)).fetchone()
+            if attempt is None:
+                raise CoordinatorError(f"unknown merge attempt: {attempt_id}")
+            if attempt["status"] != "pending":
+                raise CoordinatorError(f"merge attempt is not pending: {attempt['status']}")
+            conn.execute(
+                "UPDATE merge_attempts SET status='failed', result_sha=?, error=?, finished_at=? "
+                "WHERE id=?",
+                (result_sha, error, now, attempt_id),
+            )
+            candidate = conn.execute(
+                "SELECT * FROM candidates WHERE id=?", (attempt["candidate_id"],)
+            ).fetchone()
+            if candidate is not None:
+                try:
+                    self._transition_in_tx(
+                        conn, candidate["task_id"], "needs_fix", "merge_verification_failed"
+                    )
+                except CoordinatorError:
+                    pass
+                self._event(
+                    conn, "merge_failed", candidate["task_id"], attempt["requested_by"],
+                    {"attempt_id": attempt_id, "candidate_id": attempt["candidate_id"],
+                     "result_sha": result_sha, "error": error,
+                     "target_ref": attempt["target_ref"],
+                     "target_before_sha": attempt["target_before_sha"]},
+                )
+            row = conn.execute("SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)).fetchone()
+            return self._merge_attempt(row)
+
     def start_merge(
         self,
         candidate_id: str,
         expected_base_sha: str,
         requested_by: str = "human",
+        repo_path: str | None = None,
+        target_ref: str = "HEAD",
     ) -> dict:
+        """创建 MergeAttempt，并校验目标分支实际 HEAD。
+
+        目标分支当前 HEAD 必须等于候选的 base SHA；候选生成后目标分支前进过，
+        必须先重新验证候选，不能直接合入。
+        """
         now = _now()
         with self._tx() as conn:
             candidate = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
@@ -2708,15 +2872,30 @@ class Coordinator:
             ).fetchone()
             if pending is not None:
                 raise CoordinatorError("candidate already has a pending merge attempt")
+
+            repo_dir = self._candidate_repo_path(conn, candidate, repo_path)
+            full_ref, target_sha = self._resolve_local_target(repo_dir, target_ref)
+            if target_sha != candidate["base_sha"]:
+                raise CoordinatorError(
+                    f"target {full_ref} HEAD {target_sha} != candidate base "
+                    f"{candidate['base_sha']}; candidate must be revalidated"
+                )
+
             attempt_id = "M-" + uuid.uuid4().hex[:8]
             conn.execute(
-                "INSERT INTO merge_attempts(id, candidate_id, expected_base_sha, requested_by, "
-                "status, created_at) VALUES (?,?,?,?, 'pending', ?)",
-                (attempt_id, candidate_id, expected_base_sha, requested_by, now),
+                "INSERT INTO merge_attempts(id, candidate_id, expected_base_sha, repo_path, "
+                "target_ref, target_before_sha, requested_by, status, created_at) "
+                "VALUES (?,?,?,?,?,?,?, 'pending', ?)",
+                (attempt_id, candidate_id, expected_base_sha, str(repo_dir),
+                 full_ref, target_sha, requested_by, now),
             )
-            self._event(conn, "merge_started", candidate["task_id"], requested_by,
-                        {"attempt_id": attempt_id, "candidate_id": candidate_id,
-                         "expected_base_sha": expected_base_sha})
+            self._event(
+                conn, "merge_started", candidate["task_id"], requested_by,
+                {"attempt_id": attempt_id, "candidate_id": candidate_id,
+                 "expected_base_sha": expected_base_sha,
+                 "repo_path": str(repo_dir), "target_ref": full_ref,
+                 "target_before_sha": target_sha},
+            )
             row = conn.execute("SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)).fetchone()
             return self._merge_attempt(row)
 
@@ -2727,34 +2906,97 @@ class Coordinator:
         result_sha: str = "",
         error: str = "",
     ) -> dict:
+        """结束 MergeAttempt；succeeded 必须通过目标分支校验并实际推进 ref。"""
         if status not in ("succeeded", "failed", "unknown"):
             raise CoordinatorError(f"invalid merge status: {status}")
-        now = _now()
-        with self._tx() as conn:
+        with self._conn() as conn:
             attempt = conn.execute("SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)).fetchone()
-            if attempt is None:
-                raise CoordinatorError(f"unknown merge attempt: {attempt_id}")
-            if attempt["status"] != "pending":
-                raise CoordinatorError(f"merge attempt is not pending: {attempt['status']}")
-            conn.execute(
-                "UPDATE merge_attempts SET status=?, result_sha=?, error=?, finished_at=? WHERE id=?",
-                (status, result_sha, error, now, attempt_id),
-            )
-            if status == "succeeded":
+            candidate = None
+            if attempt is not None:
+                candidate = conn.execute(
+                    "SELECT * FROM candidates WHERE id=?", (attempt["candidate_id"],)
+                ).fetchone()
+        if attempt is None:
+            raise CoordinatorError(f"unknown merge attempt: {attempt_id}")
+        if attempt["status"] != "pending":
+            raise CoordinatorError(f"merge attempt is not pending: {attempt['status']}")
+
+        if status == "succeeded":
+            if candidate is None or candidate["status"] != "approved":
+                raise CoordinatorError("candidate is not approved; cannot confirm merge")
+            if not result_sha:
+                return self._fail_merge_attempt(
+                    attempt_id, result_sha, "result_sha is required for a succeeded merge"
+                )
+            recorded = attempt["result_sha"] or ""
+            if not recorded:
+                return self._fail_merge_attempt(
+                    attempt_id, result_sha,
+                    "no merge result recorded; run merge_candidate_git first",
+                )
+            if result_sha != recorded:
+                return self._fail_merge_attempt(
+                    attempt_id, result_sha,
+                    "result_sha does not match the recorded merge result",
+                )
+            try:
+                target_after = self._advance_target_ref(attempt, result_sha)
+            except CoordinatorError as exc:
+                return self._fail_merge_attempt(attempt_id, result_sha, str(exc))
+
+            now = _now()
+            with self._tx() as conn:
+                current = conn.execute(
+                    "SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)
+                ).fetchone()
+                if current is None or current["status"] != "pending":
+                    raise CoordinatorError("merge attempt changed while verifying target ref")
+                conn.execute(
+                    "UPDATE merge_attempts SET status='succeeded', result_sha=?, "
+                    "target_after_sha=?, error='', finished_at=? WHERE id=?",
+                    (result_sha, target_after, now, attempt_id),
+                )
                 conn.execute(
                     "UPDATE candidates SET status='merged', merged_at=? WHERE id=?",
                     (now, attempt["candidate_id"]),
                 )
-            candidate = conn.execute(
-                "SELECT task_id FROM candidates WHERE id=?", (attempt["candidate_id"],)
-            ).fetchone()
-            if status == "succeeded":
                 self._transition_in_tx(conn, candidate["task_id"], "accepted", "merge_succeeded")
-            elif status == "failed":
-                self._transition_in_tx(conn, candidate["task_id"], "needs_fix", "merge_failed")
-            self._event(conn, f"merge_{status}", candidate["task_id"], attempt["requested_by"],
-                        {"attempt_id": attempt_id, "candidate_id": attempt["candidate_id"],
-                         "result_sha": result_sha, "error": error})
+                self._event(
+                    conn, "merge_succeeded", candidate["task_id"], attempt["requested_by"],
+                    {"attempt_id": attempt_id, "candidate_id": attempt["candidate_id"],
+                     "result_sha": result_sha, "target_ref": attempt["target_ref"],
+                     "target_before_sha": attempt["target_before_sha"],
+                     "target_after_sha": target_after},
+                )
+                row = conn.execute("SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)).fetchone()
+                return self._merge_attempt(row)
+
+        now = _now()
+        with self._tx() as conn:
+            current = conn.execute("SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)).fetchone()
+            if current is None or current["status"] != "pending":
+                raise CoordinatorError("merge attempt changed while finishing")
+            conn.execute(
+                "UPDATE merge_attempts SET status=?, result_sha=?, error=?, finished_at=? WHERE id=?",
+                (status, result_sha, error, now, attempt_id),
+            )
+            candidate_row = conn.execute(
+                "SELECT * FROM candidates WHERE id=?", (attempt["candidate_id"],)
+            ).fetchone()
+            if candidate_row is not None and status == "failed":
+                try:
+                    self._transition_in_tx(
+                        conn, candidate_row["task_id"], "needs_fix", "merge_failed"
+                    )
+                except CoordinatorError:
+                    pass
+            if candidate_row is not None:
+                self._event(
+                    conn, f"merge_{status}", candidate_row["task_id"], attempt["requested_by"],
+                    {"attempt_id": attempt_id, "candidate_id": attempt["candidate_id"],
+                     "result_sha": result_sha, "error": error,
+                     "target_ref": attempt["target_ref"]},
+                )
             row = conn.execute("SELECT * FROM merge_attempts WHERE id=?", (attempt_id,)).fetchone()
             return self._merge_attempt(row)
 
@@ -2765,37 +3007,54 @@ class Coordinator:
         worktree_path: str,
         check_command: list[str] | None = None,
         timeout: float = 120,
+        target_ref: str | None = None,
     ) -> dict:
-        """真实 Git 合入：从 base 建集成分支，cherry-pick candidate，可选跑检查。
+        """真实 Git cherry-pick：从目标分支 HEAD 建集成分支，不推进目标分支。
 
-        不修改数据库；调用方拿到 result_sha 后自行 finish_merge()。
+        目标 HEAD 必须等于候选 base，且与 start_merge 记录的 target_before_sha
+        一致；返回的 result_sha 由 finish_merge 校验并推进目标 ref。
         """
         with self._conn() as conn:
             candidate = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
+            attempt = conn.execute(
+                "SELECT * FROM merge_attempts WHERE candidate_id=? AND status='pending' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (candidate_id,),
+            ).fetchone()
         if candidate is None:
             raise CoordinatorError(f"unknown candidate: {candidate_id}")
         if candidate["status"] != "approved":
             raise CoordinatorError(f"candidate is not approved: {candidate['status']}")
-        with self._conn() as conn:
-            required_role = self._required_approver_role(conn, candidate["task_id"])
-        approved_role = candidate["approver_role"] or "reviewer"
-        if APPROVER_ROLE_RANK.get(approved_role, 0) < APPROVER_ROLE_RANK[required_role]:
+        if attempt is None:
+            raise CoordinatorError("no pending merge attempt; call start_merge first")
+        if not attempt["repo_path"] or not attempt["target_ref"]:
             raise CoordinatorError(
-                f"candidate was approved by {approved_role}; project requires {required_role}"
+                "merge attempt has no target repo/ref; call start_merge with repo_path/target_ref"
             )
-        repo_dir = Path(repo_path).resolve()
-        if not repo_dir.is_dir():
-            raise CoordinatorError(f"repo path not found: {repo_dir}")
-        top = self._git(repo_dir, "rev-parse", "--show-toplevel").stdout.strip()
-        repo_dir = Path(top).resolve()
+        if Path(attempt["repo_path"]).resolve() != Path(repo_path).resolve():
+            raise CoordinatorError("repo_path does not match the pending merge attempt")
+        if target_ref:
+            provided_full, _ = self._resolve_local_target(
+                Path(attempt["repo_path"]).resolve(), target_ref
+            )
+            if provided_full != attempt["target_ref"]:
+                raise CoordinatorError("target_ref does not match the pending merge attempt")
+
+        repo_dir = Path(attempt["repo_path"]).resolve()
+        full_ref, target_sha = self._resolve_local_target(repo_dir, attempt["target_ref"])
+        if target_sha != candidate["base_sha"] or target_sha != attempt["target_before_sha"]:
+            raise CoordinatorError(
+                f"target {full_ref} moved after start_merge: {target_sha} != "
+                f"{attempt['target_before_sha']}; revalidate candidate"
+            )
         self._git(repo_dir, "cat-file", "-e", f"{candidate['candidate_sha']}^{{commit}}")
+
         integration = Path(worktree_path).resolve()
         if integration.exists():
             raise CoordinatorError(f"integration path already exists: {integration}")
         branch = f"guild/merge-{candidate_id.lower()}-{uuid.uuid4().hex[:6]}"
         integration.parent.mkdir(parents=True, exist_ok=True)
-        self._git(repo_dir, "worktree", "add", "-b", branch, str(integration),
-                  candidate["base_sha"])
+        self._git(repo_dir, "worktree", "add", "-b", branch, str(integration), target_sha)
         try:
             self._git(integration, "cherry-pick", candidate["candidate_sha"])
             check_exit = None
@@ -2813,10 +3072,18 @@ class Coordinator:
                     )
             result_sha = self._git(integration, "rev-parse", "HEAD").stdout.strip()
             with self._tx() as conn:
+                updated = conn.execute(
+                    "UPDATE merge_attempts SET result_sha=? WHERE id=? AND status='pending'",
+                    (result_sha, attempt["id"]),
+                )
+                if updated.rowcount != 1:
+                    raise CoordinatorError("merge attempt changed while preparing result")
                 self._event(conn, "merge_git_succeeded", candidate["task_id"], "system", {
                     "candidate_id": candidate_id,
                     "base_sha": candidate["base_sha"],
                     "candidate_sha": candidate["candidate_sha"],
+                    "target_ref": full_ref,
+                    "target_before_sha": target_sha,
                     "result_sha": result_sha,
                     "branch": branch,
                     "worktree": str(integration),
@@ -2824,6 +3091,8 @@ class Coordinator:
             return {
                 "candidate_id": candidate_id,
                 "result_sha": result_sha,
+                "target_ref": full_ref,
+                "target_before_sha": target_sha,
                 "branch": branch,
                 "worktree": str(integration),
                 "check_exit": check_exit,

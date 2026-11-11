@@ -1,4 +1,4 @@
-# Agent Guild 整合版（2026-11-10）
+# Agent Guild 整合版（2026-11-11）
 
 > 本目录把两份互补的 Agent Guild 材料合并成一个项目树：
 >
@@ -11,7 +11,7 @@ Agent Guild（也写作 AgentGuild）的目标是一个**本机多 Agent 项目�
 
 **当前结论：接入层和规则内核都有真实原型，但还没有统一的可操作桌面产品。** 不是一个已发布的 v1.0.1 软件，也不是生产系统。
 
-**最新阶段进度**：P1-1 证据门禁、TS 测试就绪同步和 P1-3 Codex 协议修复已完成本批验证；Python 核心回归 148 项、TS 19 项及类型检查通过。合入、界面响应、独立克隆和真实 Agent 审查生产者仍待完成。详见[本次版本说明](docs/releases/2026-11-10-p1-progress.md)。
+**最新阶段进度**：P1-1 证据门禁、P1-3 Codex 协议和 P1-2 合入正确性已完成本地验证；Python 全量回归 163 项（含 9 项 MILP）、TS 19 项及类型检查通过。界面响应、独立克隆和真实 Agent 审查生产者仍待完成。详见[本次版本说明](docs/releases/2026-11-10-p1-progress.md)和[P1-2 合入正确性](docs/releases/2026-11-11-p1-2-merge-correctness.md)。
 
 ---
 
@@ -20,7 +20,7 @@ Agent Guild（也写作 AgentGuild）的目标是一个**本机多 Agent 项目�
 | 层 | 现状 | 主要证据 |
 | --- | --- | --- |
 | M0 接入实验（TypeScript） | Codex、DSH 官方账号、DSH API Key 三条路线的基本任务均真实验证通过；交互/中断只覆盖部分场景，**M0 尚未完整验收** | `agent-guild/`、[M0 验证记录](docs/验证/M0_验证记录_2026-11-08.md)、[交接说明](docs/00_先读我_进度与架构交接.md) |
-| 协调内核（Python） | SQLite 任务/租约/文件预约/Execution/Candidate/Evidence/MergeAttempt/Worktree/lifecycle；**148 项核心回归通过，9 项 MILP 未运行** | `p0-coordinator/`、[本次版本说明](docs/releases/2026-11-10-p1-progress.md) |
+| 协调内核（Python） | SQLite 任务/租约/文件预约/Execution/Candidate/Evidence/MergeAttempt/Worktree/lifecycle；**163 项全量回归通过（含 9 项 MILP）** | `p0-coordinator/`、[P1-2 合入正确性](docs/releases/2026-11-11-p1-2-merge-correctness.md) |
 | 真实 Agent 试点 | DSH 5 个任务、Codex-DeepSeek 1 个任务、3-agent 并发、Codex App Server V1 端到端、真实 cherry-pick | `pilot/REAL-*.md`、`pilot/BATCH-DSH.md`、`pilot/INTEGRATION.md` |
 | 桌面壳 | Electron 多个版本窗口崩溃（`0xC0000005`）；WebView2 替代壳已跑通窗口、renderer、Python RPC、Start Run/Approve/Merge | [WebView2 README](p0-coordinator/webview2/README.md)、[Electron 阻塞记录](pilot/ELECTRON-BLOCKED.md) |
 | 产品界面 | **没有**目标架构中的 React 页面、受限 Electron IPC、utilityProcess 或 HTTP API；WebView2 壳不等同于正式界面 | [交接说明 §4–§5](docs/00_先读我_进度与架构交接.md) |
@@ -107,7 +107,7 @@ python smoke_cli.py
 python smoke_mcp.py
 ```
 
-本次整合后在 Windows + Python 3.14.4 + PuLP 3.3.1 上重跑：**91 tests OK**。
+本次整合后在 Windows + Python 3.14.4 + PuLP 3.3.1 上重跑：**163 tests OK**（P1-2 完成后全量，含 9 项 MILP）。
 
 ### 5.2 TypeScript M0 接入实验
 

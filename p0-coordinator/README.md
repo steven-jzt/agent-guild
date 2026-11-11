@@ -28,7 +28,7 @@ SQLite + MCP + CLI 的协调器：任务卡、写集、依赖、原子 claim、T
 - **V1 Task lifecycle**：`tasks.lifecycle` 走 Ready→Assigned→InProgress→AutoReview→HumanReview→ReadyToMerge→Accepted，另有 NeedsFix/Blocked/Cancelled；非法迁移会被拒绝。
 - **repo/path 文件预约**：`file_reservations` 按 repo + Git 相对路径预约；父子目录冲突、Windows 大小写不敏感、全有或全无；可持有到显式释放。
 - **write_set 与预约双重门**：`claim_task` / `start_execution` 同时检查 `write_set` 与 `file_reservations`；repo/path 预约会以 `file_reserved_by:<task>` 拒绝。
-- **真实 Git 合入**：`merge_candidate_git()` 从 base 建集成分支、cherry-pick candidate、可选跑检查；失败自动 abort + 删除 worktree/branch；CLI：`merge-candidate-git --candidate ... --repo-path ... --worktree ... [--check ...] [--finish]`；测试见 `test_v1_git_merge.py`。
+- **真实 Git 合入**：`start_merge` 校验目标本地分支 HEAD 必须等于 candidate base；`merge_candidate_git()` 从目标 HEAD 建集成分支、cherry-pick candidate、可选跑检查；`finish_merge` 只接受已记录的 `result_sha`，并把目标分支推进到结果后复核；失败自动 abort + 删除 worktree/branch；CLI：`merge-candidate-git --candidate ... --repo-path ... --worktree ... [--target-ref ...] [--check ...] [--finish]`；测试见 `test_v1_git_merge.py`。
 - **Adapter 合同**：`adapters.py` 提供 probe/start/stop；Codex App Server 用 `CODEX_APP_SERVER_CMD`；Codex exec 用 `codex exec --json --skip-git-repo-check`（已用 DeepSeek provider 真实跑通）；DSH 用 `dsh --profile headless --json`（需要 `DEEPSEEK_API_KEY`；已真实跑 5 个任务）；另有 Mock/通用命令适配器；`extract_usage` 可从 NDJSON 事件提取 token/cost。
 - **桌面壳**：`electron/` 有 main + utilityProcess + IPC + 任务表；本机 Electron 17/22/28/45/46a 都崩 `0xC0000005`。`webview2/` 是 WebView2 + WinForms 替代壳，已跑通窗口 + 现有 renderer + Python RPC + Start Run/Approve/Merge。
 - **可观测**：`metrics()` 返回任务状态、活跃租约、过期租约、事件数、runs、总成本、平均质量、待审批数、待验证数、验证数/平均验证分、活跃预留。
@@ -135,7 +135,7 @@ python auto_verify_demo.py
 python smoke_cli.py
 ```
 
-期望：91 tests OK；demo 最后显示 `lease_expired` / `task_committed` 事件；`MCP OK: {...}`；`CLI OK: {...}`；telemetry 输出按 worker/kind 的均值与一个 plan；milp_demo 输出 cost/time 两种排期、Pareto 表、2D/3D Pareto front、回写计划、预留拦截与 claim_planned；approval_demo 显示 review → done / ready；multi_approval_demo 显示 2-of-2；approval_timeout_demo 显示 expired + 重新发起；budget_demo 显示 budget_exceeded；v1_core_demo 显示 execution + 文件预约冲突；candidate_demo 显示 candidate → merged + lifecycle accepted；worktree_demo 显示 worktree + 越界 diff；verification_demo 显示 verification → ready/review → done；auto_verify_demo 显示 file/command pass/fail；`adapter_cli.py probe` 显示 codex available、codex-exec/codex-appserver 在 DeepSeek CODEX_HOME 下 available、dsh 需 `DEEPSEEK_API_KEY`（已真跑）、mock available。
+期望：163 tests OK；demo 最后显示 `lease_expired` / `task_committed` 事件；`MCP OK: {...}`；`CLI OK: {...}`；telemetry 输出按 worker/kind 的均值与一个 plan；milp_demo 输出 cost/time 两种排期、Pareto 表、2D/3D Pareto front、回写计划、预留拦截与 claim_planned；approval_demo 显示 review → done / ready；multi_approval_demo 显示 2-of-2；approval_timeout_demo 显示 expired + 重新发起；budget_demo 显示 budget_exceeded；v1_core_demo 显示 execution + 文件预约冲突；candidate_demo 显示 gate（真实合入见 `test_v1_git_merge.py`）；worktree_demo 显示 worktree + 越界 diff；verification_demo 显示 verification → ready/review → done；auto_verify_demo 显示 file/command pass/fail；`adapter_cli.py probe` 显示 codex available、codex-exec/codex-appserver 在 DeepSeek CODEX_HOME 下 available、dsh 需 `DEEPSEEK_API_KEY`（已真跑）、mock available。
 
 ---
 
@@ -311,7 +311,7 @@ python live-demo\verify.py
 - `executions`：一次 Run 一条，带 agent/role/workspace/session/generation/status；同一任务同时只允许一个 author Run；结束状态区分 succeeded/failed/cancelled/interrupted；
 - `runs.execution_id`：遥测记录关联到具体 Run；
 - `file_reservations`：repo + Git 相对路径；父子目录冲突、大小写不敏感、全有或全无；持有到显式释放；
-- `candidates` / `evidence` / `merge_attempts`：Candidate 冻结后进入验证批次；证据必须绑定 `candidate_sha` 并明确 `check_id`，当前批次内全部必需项（至少一项 test + 一项 review）有效通过才允许进入人工验收/批准；`start_merge` 校验 base SHA，`finish_merge` 成功才 merged（目标基线校验属于 P1-2，尚未修）；
+- `candidates` / `evidence` / `merge_attempts`：Candidate 冻结后进入验证批次；证据必须绑定 `candidate_sha` 并明确 `check_id`，当前批次内全部必需项（至少一项 test + 一项 review）有效通过才允许进入人工验收/批准；`start_merge` 校验目标分支实际 HEAD 与 candidate base，`merge_candidate_git` 从目标 HEAD 建集成分支，`finish_merge` 校验并推进目标 ref；目标分支在候选生成后前进会拒绝，必须重新验证；
 - `workspaces`：真实 `git worktree add`，记录 repo/path/branch/base_sha；`workspace_changed_files` 对比 base + 未跟踪文件；`check_workspace_scope` 检查是否越过 `file_reservations`；`commit_workspace` 提交并返回 SHA；`candidate_from_workspace` 直接生成 Candidate；
 - `tasks.lifecycle`：V1 状态机；`start_execution` → in_progress，`finish_execution(succeeded)` → auto_review，候选 ready → human_review，approve → ready_to_merge，merge succeeded → accepted；失败 → needs_fix。
 - `write_set` 与 `file_reservations` 双重门：`claim_task` / `start_execution` 都检查 repo/path 预约；冲突返回 `file_reserved_by:<task>`。
@@ -335,8 +335,18 @@ python live-demo\verify.py
 python v1_core_demo.py
 python candidate_demo.py
 python worktree_demo.py
-python -m unittest test_v1_core test_v1_worktree test_v1_lifecycle test_v1_evidence_gate -v
+python -m unittest test_v1_core test_v1_worktree test_v1_lifecycle test_v1_evidence_gate test_v1_git_merge -v
 ```
+
+### 9.2 合入正确性（P1-2，2026-11-11）
+
+- **目标分支校验**：`start_merge(candidate, expected_base, repo_path=..., target_ref=...)` 解析本地分支（或 `HEAD`）的实际 SHA，必须等于 candidate 的 `base_sha`；候选生成后目标分支前进会报 `must be revalidated`，不会创建 MergeAttempt。
+- **从目标 HEAD 建集成分支**：`merge_candidate_git()` 不再从 candidate base 建 worktree，而是从当前目标分支 HEAD 建集成分支；cherry-pick 前再次核对目标 HEAD 与 `target_before_sha`，防止 start 之后目标又前进。
+- **结果绑定**：`merge_candidate_git` 成功后把 `result_sha` 写回 pending 的 MergeAttempt；`finish_merge(succeeded)` 必须收到同一个 `result_sha`，否则记录 failed。
+- **推进并复核目标 ref**：`finish_merge` 只允许 fast-forward；目标 ref 必须从 `target_before_sha` 前进到 `result_sha`，更新后重新读取 ref 并比对；结果不是目标基线后代、目标在合入期间被外部推进、结果为空或未变化，都标记 failed，Candidate 保持 approved，任务退回 `needs_fix`。
+- **迁移**：`merge_attempts` 新增 `repo_path`、`target_ref`、`target_before_sha`、`target_after_sha`；旧库自动 `ALTER TABLE` 补列。旧的无目标信息的 pending attempt 不能确认 succeeded。
+- **CLI**：`start-merge --repo-path ... --target-ref main`；`merge-candidate-git --repo-path ... --worktree ... --target-ref main`。省略 `--repo-path` 时 `start-merge` 会尝试用候选最近的工作区。
+- **回归**：`test_v1_git_merge.py` 覆盖成功推进目标 ref、检查失败回滚、候选后目标前进、start 后目标前进、finish 收到错误/空 result、结果未变化等路径；目标分支实际 HEAD 的测试使用真实临时 Git 仓库。
 
 ---
 

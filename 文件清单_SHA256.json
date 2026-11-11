@@ -1,20 +1,20 @@
 {
   "root": "AgentGuild-整合版-2026-11-09",
-  "generatedAt": "2026-11-09T15:32:09+08:00",
+  "generatedAt": "2026-11-11T08:43:47+08:00",
   "algorithm": "SHA-256",
-  "fileCount": 251,
-  "totalBytes": 4030301,
-  "note": "本文件不包含自身；路径相对整合包根目录。",
+  "fileCount": 257,
+  "totalBytes": 4194749,
+  "note": "本文件不包含自身；路径相对整合包根目录；已排除 .git/.tmp/__pycache__ 等运行时产物。",
   "files": [
     {
       "path": "MANIFEST.md",
-      "bytes": 8431,
-      "sha256": "ed0e062e7dbf5ac5b86c3391fd48a0e523be71f8fd0942352b74647f7cc74162"
+      "bytes": 12868,
+      "sha256": "e8fecf419474f9b850f3b4aa40ff4da8b5f9d50192fb45eb3ff1221cd1ec1642"
     },
     {
       "path": "README.md",
-      "bytes": 12251,
-      "sha256": "8952f57809718e5295e5744534c9ba02045ce3ef51e466a12574d62fac5578a0"
+      "bytes": 12929,
+      "sha256": "c0c5688edcc2d36eb39cb109a385457cd0f9144040bd07055d49cc6057450f4b"
     },
     {
       "path": "agent-guild/.gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "agent-guild/README.md",
-      "bytes": 4246,
-      "sha256": "51b722f3a68c8e91d2688f9612c2a063338233d74a5fa9178dea2b75f7e803e6"
+      "bytes": 4790,
+      "sha256": "58a0a1ea354213ad285de9017f969514780418f52fde41a2e8faa3b73fdf9f5a"
     },
     {
       "path": "agent-guild/package-lock.json",
@@ -143,8 +143,8 @@
     },
     {
       "path": "agent-guild/test/fixtures/rpc-server.mjs",
-      "bytes": 720,
-      "sha256": "2d9b98ac3250acc0a02cfc072aacc018efa8e1cf138e917b8bf3a4d57e46878e"
+      "bytes": 1238,
+      "sha256": "f6badc5b91d690bfba2f60335379f73b63bc55045af4ea00654f17b3668c7f6d"
     },
     {
       "path": "agent-guild/test/json-lines.test.ts",
@@ -158,8 +158,8 @@
     },
     {
       "path": "agent-guild/test/rpc-process.test.ts",
-      "bytes": 1881,
-      "sha256": "50086b2093f9fbe88fd45bcb2558f252016c8b37514940317d291bdd85a075da"
+      "bytes": 4189,
+      "sha256": "48df3c1b1d77d9a0cd7d3473b2bc713a8b9e4cd7af34a4cb06b3a27d88401a7d"
     },
     {
       "path": "agent-guild/tsconfig.json",
@@ -170,6 +170,16 @@
       "path": "docs/00_先读我_进度与架构交接.md",
       "bytes": 17115,
       "sha256": "b9921cf31d2399b0717fce3314b3eec88239b9fc0fee77817ce2030438437111"
+    },
+    {
+      "path": "docs/releases/2026-11-10-p1-progress.md",
+      "bytes": 4406,
+      "sha256": "8776afe7a57c41c7bcc67931b2b860fe35098494bd27e087afea75dfb513bd89"
+    },
+    {
+      "path": "docs/releases/2026-11-11-p1-2-merge-correctness.md",
+      "bytes": 3628,
+      "sha256": "c5d88885e350dd5dbdd3ad97e7dec02c952530362cfdfa9ee9c8513ab1b287e1"
     },
     {
       "path": "docs/归档/交接包_交付验证摘要.json",
@@ -527,9 +537,14 @@
       "sha256": "a49868a1e8185043dad5c0935dce2a70b590e96c0c13b61e6c38475102a666c7"
     },
     {
+      "path": "p0-coordinator/.gitignore",
+      "bytes": 32,
+      "sha256": "f150d5c6628cc0322d25f2b57ffdcbd6f55fc37325ce6965a976ceba7180a3c9"
+    },
+    {
       "path": "p0-coordinator/README.md",
-      "bytes": 23969,
-      "sha256": "7f4b550daa3352880a5b8ab502b08dd1d634ee0043a2c504457f83167bd6ee4a"
+      "bytes": 32134,
+      "sha256": "6209e728b9baff4124ada6e2f719855c62e361a82c6d00ab0bc77fd2d4027b79"
     },
     {
       "path": "p0-coordinator/adapter_cli.py",
@@ -538,13 +553,13 @@
     },
     {
       "path": "p0-coordinator/adapters.py",
-      "bytes": 20688,
-      "sha256": "70cdf428ffa5b5df73a5bf420e72005297b430006f3df45aa104740e58c17320"
+      "bytes": 35896,
+      "sha256": "03b1ba6469eda42e247747a2dd6f0fd42af25eef576f90a63ee02f6e8d71f19b"
     },
     {
       "path": "p0-coordinator/agent_runner.py",
-      "bytes": 6978,
-      "sha256": "daa8130ccfad4034ed91d77a21e931fcd48f166a96a4f250aa6ce34e1b14ceb9"
+      "bytes": 7709,
+      "sha256": "867aa4e1c5e32ae2155dbabd05f47d8670636e6cfa4b89d761bba16e0a297d11"
     },
     {
       "path": "p0-coordinator/approval_demo.py",
@@ -568,13 +583,18 @@
     },
     {
       "path": "p0-coordinator/candidate_demo.py",
-      "bytes": 2020,
-      "sha256": "59e79e7795a8a341d5fe6a7ae6ffb27b91f6fc52d85848aa0f9a6578f85a41da"
+      "bytes": 2116,
+      "sha256": "0286a9f8e5512e6e46d9c60cfd312b23fd9b9d7942a3b8bd6a1d7f6dedc606f6"
+    },
+    {
+      "path": "p0-coordinator/codex_appserver_stub.py",
+      "bytes": 6100,
+      "sha256": "d3c3daaebe5ed3a235b5a58c55a94288fb9f1a416fa82718875bbd21f50b9389"
     },
     {
       "path": "p0-coordinator/coordinator.py",
-      "bytes": 124693,
-      "sha256": "7c956ec61d36d8dcb8f47042f73afed7afdffc5a91f2f80955c725162d81ebde"
+      "bytes": 172851,
+      "sha256": "0e6931d9cecaf042590f8914ca6628c65f6a6f6b8593489adf5cab5fca826e36"
     },
     {
       "path": "p0-coordinator/demo.py",
@@ -763,8 +783,8 @@
     },
     {
       "path": "p0-coordinator/mcp_server.py",
-      "bytes": 36451,
-      "sha256": "15b4298ea3ab74492aa14e0daa0b1d641da6ddd350129b428c747ec69b98d4eb"
+      "bytes": 40044,
+      "sha256": "1d4893fe5c297c1119a6008bb628e8fe0db6f04566e9b462dd6b7cb185afc39c"
     },
     {
       "path": "p0-coordinator/milp_demo.py",
@@ -822,6 +842,11 @@
       "sha256": "83e6c45dd0eb83799bc36fe92e2c42f2b6ee39b818b460ef1fc46a54da396f40"
     },
     {
+      "path": "p0-coordinator/test_codex_appserver.py",
+      "bytes": 15721,
+      "sha256": "eed5801a099f825942314d741363016c5022fbdc5e98e185eb6c6ea05cbfa04d"
+    },
+    {
       "path": "p0-coordinator/test_coordinator.py",
       "bytes": 13977,
       "sha256": "b1c83f94496b097eb89797bafa6abbf8533987f73ea35aebafd64309f8c6b3a1"
@@ -843,18 +868,23 @@
     },
     {
       "path": "p0-coordinator/test_semantic.py",
-      "bytes": 5927,
-      "sha256": "6e784f7debfe2c3a489f92983315e11a183c15b5c44f246200cd8123771b47b8"
+      "bytes": 6403,
+      "sha256": "c01ca43fd08d16d08de1bfb10cf3ed3965c88f929d01e3cb418a7885ba617c35"
     },
     {
       "path": "p0-coordinator/test_v1_core.py",
-      "bytes": 10886,
-      "sha256": "b9f3c6805837c4adbec0bf244c327eb508f9594875d3b18d1005e721e5548b38"
+      "bytes": 11334,
+      "sha256": "faef59b013eae68464ed24f3c7f08a2260c8022216d3b71de9eded5df23fe44e"
+    },
+    {
+      "path": "p0-coordinator/test_v1_evidence_gate.py",
+      "bytes": 41203,
+      "sha256": "1de63d5d99596b449f2328a8630755ad58d26c06661c24b26964e826e1b8a0cc"
     },
     {
       "path": "p0-coordinator/test_v1_git_merge.py",
-      "bytes": 4551,
-      "sha256": "feb4835b35a7d13a3ca09e84290b787df7c0c693ae0b0be37f14be11b9b881e9"
+      "bytes": 9605,
+      "sha256": "092566d716ad42044373924cbdad4ae9ef82475dd9b89141004aa738a51647f3"
     },
     {
       "path": "p0-coordinator/test_v1_lifecycle.py",
@@ -888,8 +918,8 @@
     },
     {
       "path": "p0-coordinator/webview2/Program.cs",
-      "bytes": 17296,
-      "sha256": "5667efba300158441ee05feaa9e24c1c7d1066b972bee96a7abe1b1243c7ea87"
+      "bytes": 17523,
+      "sha256": "fe085e9f51952b4ea9e2d3c84e39d4abec05a8c4aa69c16203330376872b8e83"
     },
     {
       "path": "p0-coordinator/webview2/README.md",
@@ -933,8 +963,8 @@
     },
     {
       "path": "p0-coordinator/worker_cli.py",
-      "bytes": 25286,
-      "sha256": "0e5b0544563f6cfd17d6c529d4b054b6c335a5286f8ab028c9e8a687249648be"
+      "bytes": 28003,
+      "sha256": "fbeab787c6cc44f24b919e6671079d42c0fe6cf159664630d67d40bc2f512aeb"
     },
     {
       "path": "p0-coordinator/worktree_demo.py",

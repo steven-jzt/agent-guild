@@ -96,12 +96,7 @@ class V1CoreTest(unittest.TestCase):
         approved = self.c.approve_candidate(c["candidate_id"], "alice", role="admin")
         self.assertEqual(approved["status"], "approved")
         self.assertEqual(approved["approver_role"], "admin")
-
-        attempt = self.c.start_merge(c["candidate_id"], "base-1", "alice")
-        self.assertEqual(attempt["status"], "pending")
-        done = self.c.finish_merge(attempt["attempt_id"], "succeeded", "cand-1")
-        self.assertEqual(done["status"], "succeeded")
-        self.assertEqual(self.c.get_candidate(c["candidate_id"])["status"], "merged")
+        self.assertEqual(self.c.get_task(self.t1["id"])["lifecycle"], "ready_to_merge")
         self.assertEqual(len(self.c.list_evidence(c["candidate_id"])), 3)
 
     def test_approve_requires_evidence(self):
@@ -165,8 +160,7 @@ class V1CoreTest(unittest.TestCase):
             c["candidate_id"], "alice", role="admin"
         )
         self.assertEqual(approved["approver_role"], "admin")
-        attempt = self.c.start_merge(c["candidate_id"], "base-1", "alice")
-        self.assertEqual(attempt["status"], "pending")
+        self.assertEqual(self.c.get_task(t["id"])["lifecycle"], "ready_to_merge")
 
     def test_approve_rejects_unknown_role(self):
         with self.assertRaises(CoordinatorError):
@@ -180,7 +174,7 @@ class V1CoreTest(unittest.TestCase):
                 author_execution_id=e["execution_id"],
             )
 
-    def test_merge_base_mismatch(self):
+    def test_start_merge_requires_target_repo(self):
         e = self.c.start_execution(self.t1["id"], "agent-a")
         self.c.finish_execution(e["execution_id"], "succeeded", "done")
         c = self.c.create_candidate(self.t1["id"], "repo1", "base-1", "cand-1")
@@ -188,8 +182,8 @@ class V1CoreTest(unittest.TestCase):
         record_required(self.c, c["candidate_id"], "cand-1")
         self.c.mark_candidate_ready(c["candidate_id"])
         self.c.approve_candidate(c["candidate_id"], "alice")
-        with self.assertRaises(CoordinatorError):
-            self.c.start_merge(c["candidate_id"], "base-2")
+        with self.assertRaisesRegex(CoordinatorError, "repo_path required"):
+            self.c.start_merge(c["candidate_id"], "base-1")
 
     def test_execution_lifecycle(self):
         e1 = self.c.start_execution(self.t1["id"], "agent-a", workspace="/w/a")

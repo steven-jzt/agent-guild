@@ -1,8 +1,11 @@
 # AgentGuild 整合版：清单与整合记录
 
-生成时间：2026-11-09（Asia/Shanghai）
+初版生成：2026-11-09（Asia/Shanghai）
+最近更新：2026-11-11（P1-2 合入正确性）
 
 本文件记录 `AgentGuild-整合版-2026-11-09/` 的来源、目录规则、内容改动和校验结果。整合后的统一入口见 [README.md](README.md)。
+
+> **2026-11-11 本地更新**：已实现 P1-2 合入正确性并刷新清单/分发包。当前 **258 个文件、257 项哈希**；2026-11-09 整合记录和 2026-11-10 同步记录保留在下方，历史数字不删除。
 
 ---
 
@@ -42,7 +45,7 @@ AgentGuild-整合版-2026-11-09/
 └─ 共享/                              # 5 个文件；共享/打包脚本与文案
 ```
 
-整合主体共 **250 个文件，约 3.84 MB**；加上本清单与 `文件清单_SHA256.json` 后为 **252 个文件**。
+整合主体共 **250 个文件，约 3.84 MB**；加上本清单与 `文件清单_SHA256.json` 后为 **252 个文件**（以上为 2026-11-09 整合时的数字；2026-11-10 同步后为 257 个文件，详见 §7）。
 
 目录映射规则：
 
@@ -123,7 +126,7 @@ pilot/发给朋友-运行说明.md
 
 ---
 
-## 4. 校验结果
+## 4. 校验结果（2026-11-09 整合时）
 
 | 项目 | 结果 |
 | --- | --- |
@@ -162,5 +165,79 @@ python build_full_package.py
 校验文件哈希：
 
 ```powershell
-python -c "import json,hashlib,pathlib; d=pathlib.Path('.'); m=json.load(open('文件清单_SHA256.json',encoding='utf-8')); bad=[x['path'] for x in m['files'] if hashlib.sha256((d/x['path']).read_bytes()).hexdigest().upper()!=x['sha256']]; print('checked',len(m['files']),'bad',len(bad)); print(*bad,sep='\n')"
+python -c "import json,hashlib,pathlib; d=pathlib.Path('.'); m=json.load(open('文件清单_SHA256.json',encoding='utf-8')); bad=[x['path'] for x in m['files'] if hashlib.sha256((d/x['path']).read_bytes()).hexdigest().lower()!=x['sha256'].lower()]; print('checked',len(m['files']),'bad',len(bad)); print(*bad,sep='\n')"
 ```
+
+---
+
+## 7. 2026-11-10 同步更新
+
+### 7.1 同步结果
+
+- 远端 GitHub `main`：`3ad1fd08687a857659c40c79485d87279271869f`（2026-11-10 00:22）。
+- 本地已 fast-forward 到同一提交，工作树干净，未产生合并冲突。
+- 当前跟踪文件 **257 个**，未压缩约 **4.02 MB**（不含 `.git`、`.tmp`、`__pycache__`）。
+
+### 7.2 相对 2026-11-09 整合基线的变化
+
+新增 5 个文件：
+
+```text
+docs/releases/2026-11-10-p1-progress.md
+p0-coordinator/.gitignore
+p0-coordinator/codex_appserver_stub.py
+p0-coordinator/test_codex_appserver.py
+p0-coordinator/test_v1_evidence_gate.py
+```
+
+修改 14 个文件：
+
+```text
+README.md
+agent-guild/README.md
+agent-guild/test/fixtures/rpc-server.mjs
+agent-guild/test/rpc-process.test.ts
+p0-coordinator/README.md
+p0-coordinator/adapters.py
+p0-coordinator/agent_runner.py
+p0-coordinator/candidate_demo.py
+p0-coordinator/coordinator.py
+p0-coordinator/mcp_server.py
+p0-coordinator/test_semantic.py
+p0-coordinator/test_v1_core.py
+p0-coordinator/test_v1_git_merge.py
+p0-coordinator/worker_cli.py
+```
+
+内容对应 P1-1 证据门禁、TS 测试就绪同步、P1-3 Codex App Server 协议修复和验收补修；详见 [2026-11-10 P1 进度](docs/releases/2026-11-10-p1-progress.md)。
+
+### 7.3 本次刷新后的校验
+
+| 项目 | 结果 |
+| --- | --- |
+| Python 全量测试 | `python -m unittest discover -s . -p 'test_*.py'` → **157 tests OK**（含 9 项 MILP；Python 3.14.4 + PuLP 3.3.1） |
+| 发布说明口径 | 148 项核心回归 + 9 项 MILP 未运行；本机补跑后 157/157 通过 |
+| TypeScript | 未重跑；本地没有 `node_modules`，发布说明记录 19 项测试 + `typecheck` 通过 |
+| Markdown 链接 | 生成新清单后复核，**0 broken** |
+| 哈希清单 | `文件清单_SHA256.json` 覆盖除自身外的全部 **256** 个文件，逐项复算 0 错误 |
+| 分发包 | `AgentGuild-整合版-2026-11-10.zip`，257 个文件；11-09 ZIP 保留为历史快照 |
+
+### 7.4 仍未解决
+
+- **Codex Exec 沙箱**：`CodexExecAdapter` 默认仍带 `--sandbox danger-full-access`，`agent_runner` 的 `codex-deepseek` / `codex-zhipu` 路由使用它。
+- **真实 Agent 审查生产者**：`agent_runner` 只记录 test 证据；默认必需项含 `agent-review`，因此当前真实运行会停在 `missing=agent-review`，这是预期门禁，但产品流程尚未闭合。
+- **P1-4 / P2-1**：界面异步与管道退出、独立克隆仍未完成。
+- **工程化**：根目录仍无 `.gitignore`（只有 `p0-coordinator/.gitignore`），无 LICENSE；公开仓库中的本机路径未脱敏。
+
+---
+
+## 8. 2026-11-11：P1-2 合入正确性
+
+- **目标分支校验**：`start_merge` 解析本地分支/`HEAD` 的实际 SHA，必须等于 candidate 的 `base_sha`；候选生成后目标前进时拒绝创建 MergeAttempt。
+- **从目标 HEAD 建集成分支**：`merge_candidate_git` 从目标 HEAD 建 worktree，并在 cherry-pick 前再次核对 `target_before_sha`。
+- **结果绑定**：`merge_candidate_git` 把 `result_sha` 写回 pending Attempt；`finish_merge(succeeded)` 必须收到同一个 `result_sha`。
+- **推进并复核目标 ref**：`finish_merge` 只允许 fast-forward，更新后重新读取目标 ref 并对比；目标被外部推进、结果不是基线后代、结果为空或未变化，都标记 failed，Candidate 保持 approved、任务退回 `needs_fix`。
+- **迁移**：`merge_attempts` 新增 `repo_path`、`target_ref`、`target_before_sha`、`target_after_sha`，旧库自动补列；旧的无目标信息 Attempt 不能确认 succeeded。
+- **验证**：Python 全量 **163 tests OK**（含 9 项 MILP）；`test_v1_git_merge.py` 8 条真实 Git 回归，覆盖目标前进、错误/空 result、结果未变化；`test_codex_appserver` 超时用例放宽到 1.5s 以避免慢机器误报。
+- **新增文件**：`docs/releases/2026-11-11-p1-2-merge-correctness.md`。
+- **分发包**：`AgentGuild-整合版-2026-11-11.zip`（258 个文件）；11-10、11-09 ZIP 保留为历史快照。

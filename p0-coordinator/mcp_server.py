@@ -518,12 +518,14 @@ TOOLS = [
     },
     {
         "name": "start_merge",
-        "description": "创建 MergeAttempt，要求 candidate approved 且 base_sha 匹配。",
+        "description": "创建 MergeAttempt，校验目标分支当前 HEAD 必须等于 candidate base。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "candidate_id": {"type": "string"},
                 "expected_base_sha": {"type": "string"},
+                "repo_path": {"type": "string"},
+                "target_ref": {"type": "string"},
                 "requested_by": {"type": "string"},
             },
             "required": ["candidate_id", "expected_base_sha"],
@@ -531,7 +533,7 @@ TOOLS = [
     },
     {
         "name": "finish_merge",
-        "description": "结束 MergeAttempt；succeeded 时 Candidate -> merged。",
+        "description": "结束 MergeAttempt；succeeded 时会推进并校验目标 ref 与 result_sha。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -850,6 +852,8 @@ def call_tool(c: Coordinator, name: str, args: dict[str, Any]) -> Any:
         return c.start_merge(
             args["candidate_id"], args["expected_base_sha"],
             args.get("requested_by", "human"),
+            repo_path=args.get("repo_path") or None,
+            target_ref=args.get("target_ref", "HEAD"),
         )
     if name == "finish_merge":
         return c.finish_merge(

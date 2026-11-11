@@ -1,11 +1,11 @@
-"""Candidate / Evidence / MergeAttempt 演示：SHA 冻结 -> 证据 -> 人工批准 -> 合入。"""
+"""Candidate / Evidence 门禁演示：SHA 冻结 -> 证据 -> 人工批准的前置检查。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from coordinator import Coordinator, CoordinatorError
+from coordinator import Coordinator
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / ".tmp" / "candidate-demo.db"
@@ -47,17 +47,8 @@ def main() -> int:
         return 0
     show("ready", c.mark_candidate_ready(cand["candidate_id"]))
     show("human approve", c.approve_candidate(cand["candidate_id"], "alice", "lgtm"))
-
-    attempt = c.start_merge(cand["candidate_id"], "base-abc", "alice")
-    show("merge attempt", attempt)
-    show("merge done", c.finish_merge(attempt["attempt_id"], "succeeded", "cand-def"))
-    show("final candidate", c.get_candidate(cand["candidate_id"]))
-    show("final task lifecycle", c.get_task(t["id"])["lifecycle"])
-
-    try:
-        c.start_merge(cand["candidate_id"], "base-abc")
-    except CoordinatorError as exc:
-        show("cannot merge twice", str(exc))
+    print("\n[NOTE] 真实合入需要目标仓库、review 证据和 merge-candidate-git；")
+    print("       见 test_v1_git_merge.py 与 worker_cli.py merge-candidate-git。")
     return 0
 
 

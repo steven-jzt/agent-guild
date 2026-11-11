@@ -282,22 +282,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--approver", required=True)
     p.add_argument("--reason", default="")
 
-    p = sub.add_parser("start-merge", help="创建 MergeAttempt")
+    p = sub.add_parser("start-merge", help="创建 MergeAttempt 并校验目标分支 HEAD")
     p.add_argument("--candidate", required=True)
     p.add_argument("--base-sha", required=True)
+    p.add_argument("--repo-path", default="", help="目标仓库路径；省略时用候选最近的工作区")
+    p.add_argument("--target-ref", default="HEAD", help="目标本地分支；默认当前 HEAD")
     p.add_argument("--requested-by", default="human")
 
-    p = sub.add_parser("finish-merge", help="结束 MergeAttempt")
+    p = sub.add_parser("finish-merge", help="结束 MergeAttempt 并校验目标 ref")
     p.add_argument("--attempt", required=True)
     p.add_argument("--status", default="succeeded",
                    choices=["succeeded", "failed", "unknown"])
     p.add_argument("--result-sha", default="")
     p.add_argument("--error", default="")
 
-    p = sub.add_parser("merge-candidate-git", help="真实 Git cherry-pick 并可选完成合入")
+    p = sub.add_parser("merge-candidate-git", help="从目标 HEAD cherry-pick 并可选完成合入")
     p.add_argument("--candidate", required=True)
     p.add_argument("--repo-path", required=True)
     p.add_argument("--worktree", required=True)
+    p.add_argument("--target-ref", default="HEAD", help="目标本地分支；默认当前 HEAD")
     p.add_argument("--check", default="", help="可选检查命令，shell=False")
     p.add_argument("--requested-by", default="human")
     p.add_argument("--finish", action="store_true", help="成功后直接 finish_merge")
@@ -538,7 +541,10 @@ def run(args) -> object:
     if args.cmd == "reject-candidate":
         return coord.reject_candidate(args.candidate, args.approver, args.reason)
     if args.cmd == "start-merge":
-        return coord.start_merge(args.candidate, args.base_sha, args.requested_by)
+        return coord.start_merge(
+            args.candidate, args.base_sha, args.requested_by,
+            repo_path=args.repo_path or None, target_ref=args.target_ref,
+        )
     if args.cmd == "finish-merge":
         return coord.finish_merge(
             args.attempt, args.status, args.result_sha, args.error
@@ -548,12 +554,14 @@ def run(args) -> object:
         attempts = coord.list_merge_attempts(args.candidate)
         pending = [a for a in attempts if a["status"] == "pending"]
         attempt = pending[0] if pending else coord.start_merge(
-            args.candidate, candidate["base_sha"], args.requested_by
+            args.candidate, candidate["base_sha"], args.requested_by,
+            repo_path=args.repo_path, target_ref=args.target_ref,
         )
         check = shlex.split(args.check) if args.check else None
         try:
             result = coord.merge_candidate_git(
-                args.candidate, args.repo_path, args.worktree, check
+                args.candidate, args.repo_path, args.worktree, check,
+                target_ref=None,
             )
         except Exception as exc:
             if args.finish:

@@ -300,6 +300,10 @@ namespace AgentGuildWebView2
                 args.Add(repoPath);
                 args.Add("--worktree");
                 args.Add(worktreePath);
+                string targetRef = GetString(payload, "targetRef", false);
+                if (string.IsNullOrEmpty(targetRef)) targetRef = "HEAD";
+                args.Add("--target-ref");
+                args.Add(targetRef);
                 args.Add("--requested-by");
                 args.Add(approver);
                 string check = GetString(payload, "check", false);

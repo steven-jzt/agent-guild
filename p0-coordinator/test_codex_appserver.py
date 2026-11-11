@@ -256,7 +256,9 @@ class AppServerTest(unittest.TestCase):
         client = _AppServerClient(proc)
         try:
             with self.assertRaisesRegex(AdapterError, "timed out; execution state is unknown"):
-                client.request("turn/start", {}, timeout=0.2)
+                # 0.2s 在慢机器上可能还没等到 Python 子进程开始读 stdin；
+                # 放宽到 1.5s，仍然验证超时后不重发。
+                client.request("turn/start", {}, timeout=1.5)
             self.assertEqual(len(self.incoming("turn/start")), 1)
         finally:
             proc.terminate()
