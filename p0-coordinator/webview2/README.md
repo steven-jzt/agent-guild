@@ -5,6 +5,23 @@
 这是 Electron 的替代桌面壳。  
 本机 Electron 17/22/28/45/46-alpha 都在启动阶段崩 `0xC0000005`，但 Edge/WebView2 正常，所以改用 WebView2。
 
+## 2026-11-13：异步请求与停止
+
+消息处理异步等待 Python；stdout/stderr 同时排空，单路最多 2M 字符，响应序列化超限也返回错误。每个请求由现有 Windows JobHost 管理进程树，复用 `agent-guild/src/transport/JobHost.cs`。同一任务或候选不能并发重复提交，刷新不会清除运行中的操作。当前本地请求可点击“停止当前请求”；关闭窗口或更换文档也会停止本页请求。超时和停止均不冒充业务成功。
+
+“停止请求”表示终止本地 Python/Agent 进程树；不承诺远端模型服务撤销，也不自动回滚工作区或数据库。若进程被终止时正在改文件或写记录，结果为 unknown，数据库可能仍显示执行中。先核对工作区、Execution 和 MergeAttempt；确认本地进程已退出后，使用既有 `finish-execution --status interrupted` 等明确操作收尾，不能直接自动重跑。合入的 prepared/unknown 结果使用持久凭据与真实目标核对完成。详见[版本说明与恢复步骤](../../docs/releases/2026-11-13-p1-integration-ui.md)。
+
+默认通过 `py.exe -3` 运行 Python，也可将 `PYTHON` 设为具体 Python **可执行文件路径**（不附加命令行参数）。单个请求最长 30 分钟；进程停止和管道退出分别有 5 秒确认上限，无法确认时明确报 unknown。预编译 GUI/CLI 与 `AgentGuildJobHost.exe` 已同步；`build.ps1` 可复用仓库已有 WebView2 DLL 离线构建。
+
+验证命令（在 `p0-coordinator/`）：
+
+```powershell
+py -3.13 -X utf8 -m unittest test_webview2_process test_webview2_ui -q
+node --test webview2/test-bridge.cjs
+```
+
+这些测试离线构建真实 C# 代码：10 项进程/管道测试（含创建子进程瞬间杀宿主）、3 项隐藏窗口测试及 4 项 JavaScript 桥接/界面逻辑测试；不会调用真实模型。`--smoke` 和 `--smoke-cancel` 是测试模式，窗口隐藏，实际交互启动不加这些参数。
+
 ## 直接运行
 
 ```powershell
@@ -47,7 +64,7 @@ WEBVIEW2_SMOKE {"smoke":true,"data":[...projects...]}
 - 任务表 + **启动 Run**（真正启动选中 agent）；
 - 候选表；
 - **批准**（awaiting_human）；
-- **合入**（approved，真实 cherry-pick + finish_merge）；
+- **合入**（approved，准备完整候选快照 + finish_merge 确认目标更新）；
 - 刷新；
 - RPC：`projects` / `status` / `candidates` / `start_run` / `approve` / `merge` / `adapters`。
 
@@ -68,7 +85,7 @@ start execution
 - 需要任务**已有 active workspace**；
 - `check` 为空时，Candidate 停在 `building`，不会自动进人工审批；
 - DSH 用独立 `DSH_HOME`（`.tmp/dsh-ui-home`），已验证 UI 启动；
-- Merge 走 `merge_candidate_git()`，会真实 cherry-pick、失败回滚。
+- Merge 走 `merge_candidate_git()` 准备完整候选，再由 `finish_merge()` 核对并更新目标；基线变化、用户脏工作区和未确认结果不会显示合入成功。
 
 ## 真实启动 agent
 

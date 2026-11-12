@@ -52,6 +52,7 @@ class JobHost {
 
     static int Main(string[] args) {
         IntPtr parent = IntPtr.Zero, job = IntPtr.Zero; ProcessInfo child = new ProcessInfo();
+        bool ownsJob = false;
         try {
             if (args.Length < 2) throw new ArgumentException("Expected owner PID and executable");
             parent = OpenProcess(0x00100000, false, int.Parse(args[0]));
@@ -60,12 +61,16 @@ class JobHost {
             if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
             var limits = new ExtendedLimits(); limits.Basic.Flags = 0x00002000; // KILL_ON_JOB_CLOSE
             Require(SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(limits)));
+            // Join before creating any child: children inherit job membership atomically.
+            // Killing this host during CreateProcess must not strand a suspended child.
+            using (var current = System.Diagnostics.Process.GetCurrentProcess())
+                Require(AssignProcessToJobObject(job, current.Handle));
+            ownsJob = true;
             var command = new StringBuilder();
             for (int index = 1; index < args.Length; index++) { if (index > 1) command.Append(' '); command.Append(Quote(args[index])); }
             var startup = new StartupInfo(); startup.Size = Marshal.SizeOf(startup); startup.Flags = 0x00000100;
             startup.Input = GetStdHandle(-10); startup.Output = GetStdHandle(-11); startup.Error = GetStdHandle(-12);
             Require(CreateProcess(args[1], command, IntPtr.Zero, IntPtr.Zero, true, 0x08000004, IntPtr.Zero, null, ref startup, out child));
-            if (!AssignProcessToJobObject(job, child.Process)) { TerminateProcess(child.Process, 125); throw new Win32Exception(Marshal.GetLastWin32Error()); }
             if (ResumeThread(child.Thread) == 0xffffffff) throw new Win32Exception(Marshal.GetLastWin32Error());
             uint wait = WaitForMultipleObjects(2, new IntPtr[] { child.Process, parent }, false, 0xffffffff);
             if (wait == 1) { TerminateJobObject(job, 130); WaitForSingleObject(child.Process, 5000); return 130; }
@@ -74,7 +79,10 @@ class JobHost {
         } catch (Exception exception) {
             Console.Error.WriteLine("Agent Guild process host: " + exception.Message); return 125;
         } finally {
-            if (job != IntPtr.Zero) CloseHandle(job);
+            // A member closing its own last job handle would kill itself before returning
+            // the worker exit code. Keep this non-inheritable handle until process exit;
+            // Windows then closes it and terminates any surviving descendants.
+            if (job != IntPtr.Zero && !ownsJob) CloseHandle(job);
             if (child.Thread != IntPtr.Zero) CloseHandle(child.Thread);
             if (child.Process != IntPtr.Zero) CloseHandle(child.Process);
             if (parent != IntPtr.Zero) CloseHandle(parent);
