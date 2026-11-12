@@ -286,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--candidate", required=True)
     p.add_argument("--base-sha", required=True)
     p.add_argument("--repo-path", default="", help="目标仓库路径；省略时用候选最近的工作区")
-    p.add_argument("--target-ref", default="HEAD", help="目标本地分支；默认当前 HEAD")
+    p.add_argument("--target-ref", "--target-branch", default="HEAD", help="目标本地分支；默认当前 HEAD")
     p.add_argument("--requested-by", default="human")
 
     p = sub.add_parser("finish-merge", help="结束 MergeAttempt 并校验目标 ref")
@@ -300,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--candidate", required=True)
     p.add_argument("--repo-path", required=True)
     p.add_argument("--worktree", required=True)
-    p.add_argument("--target-ref", default="HEAD", help="目标本地分支；默认当前 HEAD")
+    p.add_argument("--target-ref", "--target-branch", default="HEAD", help="目标本地分支；默认当前 HEAD")
     p.add_argument("--check", default="", help="可选检查命令，shell=False")
     p.add_argument("--requested-by", default="human")
     p.add_argument("--finish", action="store_true", help="成功后直接 finish_merge")
@@ -558,21 +558,19 @@ def run(args) -> object:
             repo_path=args.repo_path, target_ref=args.target_ref,
         )
         check = shlex.split(args.check) if args.check else None
-        try:
-            result = coord.merge_candidate_git(
-                args.candidate, args.repo_path, args.worktree, check,
-                target_ref=None,
-            )
-        except Exception as exc:
-            if args.finish:
-                coord.finish_merge(attempt["attempt_id"], "failed", "", str(exc))
-            raise
+        provided_ref, _ = coord._resolve_local_target(Path(args.repo_path), args.target_ref)
+        if provided_ref != attempt["target_ref"]:
+            raise CoordinatorError("target branch does not match the pending merge attempt")
+        result = coord.merge_candidate_git(
+            args.candidate, args.repo_path, args.worktree, check,
+        )
         if args.finish:
             result["merge_attempt"] = coord.finish_merge(
                 attempt["attempt_id"], "succeeded", result["result_sha"]
             )
         else:
-            result["merge_attempt"] = attempt
+            result["merge_attempt"] = next(a for a in coord.list_merge_attempts(args.candidate)
+                                           if a["attempt_id"] == attempt["attempt_id"])
         return result
     if args.cmd == "transition-task":
         return coord.transition_task(args.task, args.state, args.reason)
