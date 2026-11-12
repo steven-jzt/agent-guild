@@ -1,20 +1,21 @@
 {
-  "root": "AgentGuild-整合版-2026-11-09",
-  "generatedAt": "2026-11-11T08:43:47+08:00",
+  "root": "agent-guild",
+  "generatedAt": "2026-11-13",
+  "timezone": "Asia/Shanghai",
   "algorithm": "SHA-256",
-  "fileCount": 257,
-  "totalBytes": 4194749,
-  "note": "本文件不包含自身；路径相对整合包根目录；已排除 .git/.tmp/__pycache__ 等运行时产物。",
+  "fileCount": 264,
+  "totalBytes": 4271128,
+  "note": "不包含自身；路径相对仓库根目录；按 Git 归档内容（Git 规范化字节）计算；Windows 归档需 core.autocrlf=false；排除未跟踪运行时产物。",
   "files": [
     {
       "path": "MANIFEST.md",
-      "bytes": 12868,
-      "sha256": "e8fecf419474f9b850f3b4aa40ff4da8b5f9d50192fb45eb3ff1221cd1ec1642"
+      "bytes": 13553,
+      "sha256": "cff6367179a50c62ff197a33a8c2b846ea78eaaecacb7d349744494af333e662"
     },
     {
       "path": "README.md",
-      "bytes": 12929,
-      "sha256": "c0c5688edcc2d36eb39cb109a385457cd0f9144040bd07055d49cc6057450f4b"
+      "bytes": 12926,
+      "sha256": "66aa53335a07468b451ae6f414a1cf68ffa91fa311ea1744fb6db944d7090bcd"
     },
     {
       "path": "agent-guild/.gitignore",
@@ -23,8 +24,8 @@
     },
     {
       "path": "agent-guild/README.md",
-      "bytes": 4790,
-      "sha256": "58a0a1ea354213ad285de9017f969514780418f52fde41a2e8faa3b73fdf9f5a"
+      "bytes": 4726,
+      "sha256": "6a66fc64cb686a32b0aa435da48d87caa48c6d5c989ead5d09399cd41de1ee70"
     },
     {
       "path": "agent-guild/package-lock.json",
@@ -143,8 +144,8 @@
     },
     {
       "path": "agent-guild/test/fixtures/rpc-server.mjs",
-      "bytes": 1238,
-      "sha256": "f6badc5b91d690bfba2f60335379f73b63bc55045af4ea00654f17b3668c7f6d"
+      "bytes": 1214,
+      "sha256": "c1297c7834849a20225325639f693e4f71909116e5efa86e3db66240e16c6a48"
     },
     {
       "path": "agent-guild/test/json-lines.test.ts",
@@ -158,8 +159,8 @@
     },
     {
       "path": "agent-guild/test/rpc-process.test.ts",
-      "bytes": 4189,
-      "sha256": "48df3c1b1d77d9a0cd7d3473b2bc713a8b9e4cd7af34a4cb06b3a27d88401a7d"
+      "bytes": 4082,
+      "sha256": "9bdde5e849de8fe2334a2bc89adb19611eecf814fe2d4071a6b0a4d096cc2d4c"
     },
     {
       "path": "agent-guild/tsconfig.json",
@@ -173,8 +174,8 @@
     },
     {
       "path": "docs/releases/2026-11-10-p1-progress.md",
-      "bytes": 4406,
-      "sha256": "8776afe7a57c41c7bcc67931b2b860fe35098494bd27e087afea75dfb513bd89"
+      "bytes": 4346,
+      "sha256": "f27f5f28066f32b5261673865bee6a279089657c6d07b66683240049208498b1"
     },
     {
       "path": "docs/releases/2026-11-11-p1-2-merge-correctness.md",
@@ -182,14 +183,19 @@
       "sha256": "c5d88885e350dd5dbdd3ad97e7dec02c952530362cfdfa9ee9c8513ab1b287e1"
     },
     {
+      "path": "docs/releases/2026-11-13-p1-integration-ui.md",
+      "bytes": 7002,
+      "sha256": "75d5a9b111cd17c57ddbcb9325ef1d5d909a81db5e5a6cd8b2717205e9e590dc"
+    },
+    {
       "path": "docs/归档/交接包_交付验证摘要.json",
-      "bytes": 1041,
-      "sha256": "4a7182173c0b1916e823ae0fadd875f349e9edcbbfac3367ea163e1764eded43"
+      "bytes": 1006,
+      "sha256": "21cf8dc10585afb4ab402981b7c4705714198e9997872cbe873affb40c5534ab"
     },
     {
       "path": "docs/归档/交接包_文件清单_SHA256.json",
-      "bytes": 6041,
-      "sha256": "fc8a37cbaefebadd26e8f84e4ea5d9567fa08b6aa14eebca559be53f37ff6ca1"
+      "bytes": 5859,
+      "sha256": "8d09ec9fb480f2b845a65a2636ce90d6ca2cdcc8695748e1e8639199b726b81e"
     },
     {
       "path": "docs/归档/完整项目_MANIFEST.md",
@@ -538,13 +544,13 @@
     },
     {
       "path": "p0-coordinator/.gitignore",
-      "bytes": 32,
-      "sha256": "f150d5c6628cc0322d25f2b57ffdcbd6f55fc37325ce6965a976ceba7180a3c9"
+      "bytes": 29,
+      "sha256": "e39827047eb3851f3b78ab01392edf2b472c017b8027fd59725467dca18b3dd2"
     },
     {
       "path": "p0-coordinator/README.md",
-      "bytes": 32134,
-      "sha256": "6209e728b9baff4124ada6e2f719855c62e361a82c6d00ab0bc77fd2d4027b79"
+      "bytes": 32222,
+      "sha256": "1e6dddd15a06eec9d5e631704e557a40e41082db354fee778d387d18a5ae6501"
     },
     {
       "path": "p0-coordinator/adapter_cli.py",
@@ -553,13 +559,13 @@
     },
     {
       "path": "p0-coordinator/adapters.py",
-      "bytes": 35896,
-      "sha256": "03b1ba6469eda42e247747a2dd6f0fd42af25eef576f90a63ee02f6e8d71f19b"
+      "bytes": 35009,
+      "sha256": "f908cd2e9477d656a3545c89183aeedf759fe576bc7065bdb944994c66880cf5"
     },
     {
       "path": "p0-coordinator/agent_runner.py",
-      "bytes": 7709,
-      "sha256": "867aa4e1c5e32ae2155dbabd05f47d8670636e6cfa4b89d761bba16e0a297d11"
+      "bytes": 7515,
+      "sha256": "7dc6db1b14cb59f751b10712052f94b1b2158c0b9effe08a7668bd482f675e9b"
     },
     {
       "path": "p0-coordinator/approval_demo.py",
@@ -583,18 +589,18 @@
     },
     {
       "path": "p0-coordinator/candidate_demo.py",
-      "bytes": 2116,
-      "sha256": "0286a9f8e5512e6e46d9c60cfd312b23fd9b9d7942a3b8bd6a1d7f6dedc606f6"
+      "bytes": 2060,
+      "sha256": "d8ae8d0fd2ed633d482959fdba1dbeeac1b5f444fde31b225fb9d56bd0b09787"
     },
     {
       "path": "p0-coordinator/codex_appserver_stub.py",
-      "bytes": 6100,
-      "sha256": "d3c3daaebe5ed3a235b5a58c55a94288fb9f1a416fa82718875bbd21f50b9389"
+      "bytes": 5922,
+      "sha256": "804cfb9544809caac72d0e7019f7e898ac56a5cb93768c63324c65d8596bb90d"
     },
     {
       "path": "p0-coordinator/coordinator.py",
-      "bytes": 172851,
-      "sha256": "0e6931d9cecaf042590f8914ca6628c65f6a6f6b8593489adf5cab5fca826e36"
+      "bytes": 169109,
+      "sha256": "05335f6a97db4b7140c0615e4fadb4a7fd253dbd3bf88384c312c56c191d72ba"
     },
     {
       "path": "p0-coordinator/demo.py",
@@ -643,8 +649,8 @@
     },
     {
       "path": "p0-coordinator/electron/renderer/renderer.js",
-      "bytes": 16209,
-      "sha256": "9ce8f34ada2f05373320740866d8ef687072cfdb97c0b33fd130c671e8e6171e"
+      "bytes": 17945,
+      "sha256": "cc3ba2d9e448c3c8d59acc9075f51f5db3b0a3f0caf3423d6879840a955ab8d6"
     },
     {
       "path": "p0-coordinator/electron/smoke_cli.js",
@@ -783,8 +789,8 @@
     },
     {
       "path": "p0-coordinator/mcp_server.py",
-      "bytes": 40044,
-      "sha256": "1d4893fe5c297c1119a6008bb628e8fe0db6f04566e9b462dd6b7cb185afc39c"
+      "bytes": 38975,
+      "sha256": "182641a5aee4179905c4673ab55d588517a68ffccfb425ef00f9ad71ca892adb"
     },
     {
       "path": "p0-coordinator/milp_demo.py",
@@ -843,8 +849,8 @@
     },
     {
       "path": "p0-coordinator/test_codex_appserver.py",
-      "bytes": 15721,
-      "sha256": "eed5801a099f825942314d741363016c5022fbdc5e98e185eb6c6ea05cbfa04d"
+      "bytes": 15371,
+      "sha256": "7a66801d33fc25ffe970b0c69bb63a64cace4790dca7ccc2eed2d9a7afdf92bc"
     },
     {
       "path": "p0-coordinator/test_coordinator.py",
@@ -868,23 +874,23 @@
     },
     {
       "path": "p0-coordinator/test_semantic.py",
-      "bytes": 6403,
-      "sha256": "c01ca43fd08d16d08de1bfb10cf3ed3965c88f929d01e3cb418a7885ba617c35"
+      "bytes": 6266,
+      "sha256": "e4767b4455ed06a032a3f078752bf2045dc2443c02acded0c73fd8841b0cfe7c"
     },
     {
       "path": "p0-coordinator/test_v1_core.py",
-      "bytes": 11334,
-      "sha256": "faef59b013eae68464ed24f3c7f08a2260c8022216d3b71de9eded5df23fe44e"
+      "bytes": 11093,
+      "sha256": "e697fe155153625b768ef5bff35c52d80fd7fe8f1718060fa2955b1ab36ec24b"
     },
     {
       "path": "p0-coordinator/test_v1_evidence_gate.py",
-      "bytes": 41203,
-      "sha256": "1de63d5d99596b449f2328a8630755ad58d26c06661c24b26964e826e1b8a0cc"
+      "bytes": 40310,
+      "sha256": "03444a6f2b9cc9bd6e3eea47a9cae2fd5b9e9fa6eaad1dd3604ec5bca2b8f1e7"
     },
     {
       "path": "p0-coordinator/test_v1_git_merge.py",
-      "bytes": 9605,
-      "sha256": "092566d716ad42044373924cbdad4ae9ef82475dd9b89141004aa738a51647f3"
+      "bytes": 16621,
+      "sha256": "93c5c253762f2465039eba60b0100c57ab45e2d6f92f9fa096ac0f7bd69fbda2"
     },
     {
       "path": "p0-coordinator/test_v1_lifecycle.py",
@@ -902,6 +908,16 @@
       "sha256": "2cf9dc9b98712007a7bb645b0a0e3bcb78478e101c4f99cf63bc0dc199ada456"
     },
     {
+      "path": "p0-coordinator/test_webview2_process.py",
+      "bytes": 5517,
+      "sha256": "abb9b236f2a77ac821d249d77eaab1be33e06d332c0df4ea60f4dd7e8956105a"
+    },
+    {
+      "path": "p0-coordinator/test_webview2_ui.py",
+      "bytes": 3701,
+      "sha256": "27fb4715aff5c58dcf152b59a7bc3ae20eb1bea67ee844016ffd848713dc3e1c"
+    },
+    {
       "path": "p0-coordinator/v1_core_demo.py",
       "bytes": 1504,
       "sha256": "ccb1daec23eec920ec85c19d9eac2398a713c63ab009b82cc00e864475a1ef52"
@@ -917,24 +933,39 @@
       "sha256": "a723ef8fd3210537a8cba9cd7b8f6e2987f8905dc9b23d8adfe7449b5bc48ebb"
     },
     {
+      "path": "p0-coordinator/webview2/AsyncProcessRunner.cs",
+      "bytes": 6169,
+      "sha256": "70248ae76990ec3730ba08cf8bfa9f5de14562c38a52736c827cbde12a5159be"
+    },
+    {
+      "path": "p0-coordinator/webview2/ProcessRunnerHarness.cs",
+      "bytes": 2084,
+      "sha256": "ade3f19ea91b37c9194f6437279920ddf848b97804bd55c9941549a886c4f235"
+    },
+    {
       "path": "p0-coordinator/webview2/Program.cs",
-      "bytes": 17523,
-      "sha256": "fe085e9f51952b4ea9e2d3c84e39d4abec05a8c4aa69c16203330376872b8e83"
+      "bytes": 21081,
+      "sha256": "f969dcd5ca4d1de64bda320fa683b40d586da2442519d3bd4ef7c30cd13a0040"
     },
     {
       "path": "p0-coordinator/webview2/README.md",
-      "bytes": 3780,
-      "sha256": "a7b8a2ef4fe3a04833808b5aadfad5f4af28dbdbaa488942345c283eedaef8b3"
+      "bytes": 5856,
+      "sha256": "f3ce1d1fba50deb89e739ec1308c47357b3413d474e77982f87d6f3472de60b5"
+    },
+    {
+      "path": "p0-coordinator/webview2/bin/AgentGuildJobHost.exe",
+      "bytes": 7168,
+      "sha256": "ca93ef133e28a685c8973863e6ae07205e9bd0b13904f802f2411c9a7bcea4b1"
     },
     {
       "path": "p0-coordinator/webview2/bin/AgentGuildWebView2.exe",
-      "bytes": 19968,
-      "sha256": "5dc417cfded31bcbb4b698dfe805c9fd7a242f93d118a43165751ae27d86ca6b"
+      "bytes": 36864,
+      "sha256": "0976e92d9ef32db00b9e607d6b3815d74ff48b498d2f2cad6469d65fb148b14e"
     },
     {
       "path": "p0-coordinator/webview2/bin/AgentGuildWebView2Cli.exe",
-      "bytes": 19968,
-      "sha256": "0cd13b7381ea7357dad5cff95b8c76ab14920a8365cac4778b7fa499e9f61035"
+      "bytes": 36864,
+      "sha256": "6bbcbf1809c42fc3d4c2a5159297d2b2760e3801d7aaa3e5359a26c5d5fe2b95"
     },
     {
       "path": "p0-coordinator/webview2/bin/Microsoft.Web.WebView2.Core.dll",
@@ -953,8 +984,8 @@
     },
     {
       "path": "p0-coordinator/webview2/build.ps1",
-      "bytes": 1973,
-      "sha256": "344b26f085640ecb924186181e4d80810a33592074bdfc3a9861b9e2596186af"
+      "bytes": 2482,
+      "sha256": "1b6a12671d98904b5a7afd38aea3204e3522fd340ea227e03e84b83700c5d69b"
     },
     {
       "path": "p0-coordinator/webview2/run.ps1",
@@ -962,9 +993,14 @@
       "sha256": "49ccd0d1d7017f8cc5bf42aff7517cdd61bcc4e8d4bb74e2285d496c13cbfd3f"
     },
     {
+      "path": "p0-coordinator/webview2/test-bridge.cjs",
+      "bytes": 4480,
+      "sha256": "9fd3e65e89c1c8be7c8fa2f0e220ee0238dbd170de7df3e8d9d7e93de431160c"
+    },
+    {
       "path": "p0-coordinator/worker_cli.py",
-      "bytes": 28003,
-      "sha256": "fbeab787c6cc44f24b919e6671079d42c0fe6cf159664630d67d40bc2f512aeb"
+      "bytes": 27564,
+      "sha256": "50607b5fe89a3fc5655427f93502376659c8e5b65721f26e8e019c445f6ca0b6"
     },
     {
       "path": "p0-coordinator/worktree_demo.py",
@@ -1123,8 +1159,8 @@
     },
     {
       "path": "pilot/make_status_report.py",
-      "bytes": 22732,
-      "sha256": "565fdf7bd7e6f8b802221c1b55e28d5c9f52c18244ae87355265a8e9b605f4be"
+      "bytes": 22194,
+      "sha256": "a14267279f5c6724e2efbdc0006e01d0ed1e346ef6df96d4a49c9f848241aa01"
     },
     {
       "path": "pilot/org-visual.html",

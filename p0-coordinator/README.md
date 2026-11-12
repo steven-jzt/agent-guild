@@ -4,7 +4,7 @@ SQLite + MCP + CLI 的协调器：任务卡、写集、依赖、原子 claim、T
 
 协调器纯 Python 标准库；MILP 计划器用 PuLP/CBC（本机已装）；Worktree 功能需要 Git 2.30+。不依赖网络。
 
-> 最新状态汇总：[../docs/现状/当前状态-2026-11-08.md](../docs/现状/当前状态-2026-11-08.md)。
+> 最新更新：[P1-2 统一与 P1-4 界面响应（2026-11-13）](../docs/releases/2026-11-13-p1-integration-ui.md)。更早原型汇总：[2026-11-08](../docs/现状/当前状态-2026-11-08.md)。
 > 内部试点计划：[../pilot/PLAN.md](../pilot/PLAN.md)。
 
 ---
@@ -338,7 +338,9 @@ python worktree_demo.py
 python -m unittest test_v1_core test_v1_worktree test_v1_lifecycle test_v1_evidence_gate test_v1_git_merge -v
 ```
 
-### 9.2 合入正确性（P1-2，2026-11-11）
+### 9.2 合入正确性（P1-2，2026-11-11 历史记录）
+
+11 月 13 日已统一实现，保留 `start_merge → merge_candidate_git 准备 → finish_merge 确认` 三步接口；`--repo-path/--target-ref`、MCP 和 WebView2 参数继续有效。新的结果凭据、未知状态恢复及完整候选语义见[最新版本说明](../docs/releases/2026-11-13-p1-integration-ui.md)。下方为 11 月 11 日版本的原始说明。
 
 - **目标分支校验**：`start_merge(candidate, expected_base, repo_path=..., target_ref=...)` 解析本地分支（或 `HEAD`）的实际 SHA，必须等于 candidate 的 `base_sha`；候选生成后目标分支前进会报 `must be revalidated`，不会创建 MergeAttempt。
 - **从目标 HEAD 建集成分支**：`merge_candidate_git()` 不再从 candidate base 建 worktree，而是从当前目标分支 HEAD 建集成分支；cherry-pick 前再次核对目标 HEAD 与 `target_before_sha`，防止 start 之后目标又前进。
