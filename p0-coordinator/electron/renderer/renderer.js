@@ -7,6 +7,35 @@ const worktreeInput = $('worktree');
 const checkInput = $('check');
 const noticeBox = $('notice');
 const errorBox = $('error');
+const pendingActions = new Map();
+
+async function runAction(key, command, payload) {
+  if (pendingActions.has(key)) throw new Error('该操作仍在执行，请勿重复提交');
+  const request = window.guild.rpc(command, payload);
+  pendingActions.set(key, request);
+  renderTasks();
+  renderCandidates();
+  try { return await request; }
+  finally {
+    pendingActions.delete(key);
+    renderTasks();
+    renderCandidates();
+  }
+}
+
+function cancelButton(key) {
+  const request = pendingActions.get(key);
+  return request && typeof request.cancel === 'function'
+    ? `<button class="btn ghost" data-action="cancel" data-key="${esc(key)}">停止当前请求</button>`
+    : '<button class="btn ghost" disabled>执行中…</button>';
+}
+
+async function cancelAction(key) {
+  const request = pendingActions.get(key);
+  if (!request || typeof request.cancel !== 'function') return;
+  await request.cancel();
+  showNotice('已请求停止本地进程，等待退出；业务结果需刷新核对，不要直接重试。');
+}
 
 window.__lastError = '';
 window.addEventListener('error', (event) => {
@@ -231,6 +260,7 @@ function taskCheck(task) {
 }
 
 function taskAction(t) {
+  if (pendingActions.has(`run:${t.id}`)) return cancelButton(`run:${t.id}`);
   const active = state.candidates.find((c) =>
     c.task_id === t.id && ['building', 'validating', 'awaiting_human', 'approved'].includes(c.status));
   if (active) {
@@ -303,8 +333,9 @@ function renderCandidates() {
     return;
   }
   $('candidateCards').innerHTML = state.candidates.map((c) => {
-    const canApprove = c.status === 'awaiting_human';
-    const canMerge = c.status === 'approved' && hasPaths();
+    const busy = pendingActions.has(`candidate:${c.candidate_id}`);
+    const canApprove = !busy && c.status === 'awaiting_human';
+    const canMerge = !busy && c.status === 'approved' && hasPaths();
     return `
       <div class="candidate">
         <div class="c-top"><span class="c-id">${esc(c.candidate_id)}</span>${pill(textOf(CANDIDATE_TEXT, c.status), candidateTone(c.status))}</div>
@@ -313,6 +344,7 @@ function renderCandidates() {
         <div class="c-sha mono">${esc((c.candidate_sha || '').slice(0, 14))}</div>
         ${c.status === 'approved' && !hasPaths() ? '<div class="c-task">先填写运行设置，或点“填入示例”</div>' : ''}
         <div class="c-actions">
+          ${busy ? cancelButton(`candidate:${c.candidate_id}`) : ''}
           ${canApprove ? `<button class="btn green" data-action="approve" data-id="${esc(c.candidate_id)}">批准</button>` : ''}
           ${canMerge ? `<button class="btn" data-action="merge" data-id="${esc(c.candidate_id)}">合入</button>` : ''}
         </div>
@@ -329,7 +361,7 @@ async function startRun(taskId, button) {
   const old = button.textContent;
   button.textContent = '运行中…';
   try {
-    const result = await window.guild.rpc('start_run', {
+    const result = await runAction(`run:${taskId}`, 'start_run', {
       taskId, agent: agentSelect.value, check,
     });
     if (result.ok) {
@@ -348,7 +380,7 @@ async function startRun(taskId, button) {
 }
 
 async function approveCandidate(candidateId) {
-  const result = await window.guild.rpc('approve', {
+  const result = await runAction(`candidate:${candidateId}`, 'approve', {
     candidateId, approver: 'webview2-reviewer', note: '界面批准',
     role: approverRole.value,
   });
@@ -364,23 +396,33 @@ async function mergeCandidate(candidateId) {
   const repoPath = repoInput.value.trim();
   const worktreePath = worktreeInput.value.trim();
   if (!repoPath || !worktreePath) throw new Error('请先填写仓库和合入 Worktree 路径');
-  const result = await window.guild.rpc('merge', {
+  const result = await runAction(`candidate:${candidateId}`, 'merge', {
     candidateId, repoPath, worktreePath, approver: 'webview2-reviewer',
     check: checkInput.value.trim(),
   });
-  showNotice(`已合入：${result.result_sha || JSON.stringify(result)}`);
+  if (!result.merge_attempt || result.merge_attempt.status !== 'succeeded')
+    throw new Error(result.merge_attempt?.error || '合入结果尚未确认，请刷新核对');
+  showNotice(`已合入：${result.result_sha}`);
   await loadAll();
 }
 
 $('taskRows').addEventListener('click', async (event) => {
-  const button = event.target.closest('button[data-action="run"]');
+  const button = event.target.closest('button[data-action]');
   if (!button) return;
+  if (button.dataset.action === 'cancel') {
+    try { await cancelAction(button.dataset.key); } catch (err) { showError(err); }
+    return;
+  }
   try { await startRun(button.dataset.id, button); } catch (err) { showError(err); }
 });
 
 $('candidateCards').addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
+  if (button.dataset.action === 'cancel') {
+    try { await cancelAction(button.dataset.key); } catch (err) { showError(err); }
+    return;
+  }
   button.disabled = true;
   try {
     if (button.dataset.action === 'approve') await approveCandidate(button.dataset.id);

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -24,11 +25,21 @@ namespace AgentGuildWebView2
         private static bool _screenshotDone;
         private static string _dumpTextPath;
         private static bool _dumpTextDone;
+        private static readonly Dictionary<string, CancellationTokenSource> Requests = new Dictionary<string, CancellationTokenSource>();
+        private static readonly HashSet<string> Mutations = new HashSet<string>();
+        private static bool _closing;
+        private static int _page;
+        private static int _uiTicks;
+        private static bool _uiResponsive;
+        private static bool _smokeCancel;
 
         [STAThread]
         private static void Main(string[] args)
         {
+            Console.OutputEncoding = new UTF8Encoding(false);
             _smoke = Array.IndexOf(args, "--smoke") >= 0;
+            _smokeCancel = Array.IndexOf(args, "--smoke-cancel") >= 0;
+            _smoke = _smoke || _smokeCancel;
             _screenshotPath = ArgValue(args, "--screenshot");
             _dumpTextPath = ArgValue(args, "--dump-text");
             _p0Root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", ".."));
@@ -46,7 +57,8 @@ namespace AgentGuildWebView2
                     AddIf(payload, "agent", ArgValue(args, "--agent"));
                     AddIf(payload, "check", ArgValue(args, "--check"));
                     AddIf(payload, "prompt", ArgValue(args, "--prompt"));
-                    object data = RunCommand(call, payload);
+                    AddIf(payload, "targetRef", ArgValue(args, "--target-ref"));
+                    object data = RunCommandAsync(call, payload, CancellationToken.None).GetAwaiter().GetResult();
                     Console.WriteLine(Json.Serialize(data));
                     Environment.ExitCode = 0;
                 }
@@ -69,11 +81,16 @@ namespace AgentGuildWebView2
             _form.Height = 900;
             _form.MinimumSize = new Size(1000, 700);
             _form.StartPosition = FormStartPosition.CenterScreen;
+            if (_smoke) { _form.Opacity = 0; _form.ShowInTaskbar = false; }
             _webView = new WebView2();
             _webView.Dock = DockStyle.Fill;
             _form.Controls.Add(_webView);
             _form.Shown += async (sender, e) => { await InitAsync(renderer); };
+            _form.FormClosing += delegate { _closing = true; CancelRequests(); };
             _form.FormClosed += delegate { Application.Exit(); };
+            var uiTimer = new System.Windows.Forms.Timer { Interval = 50 };
+            uiTimer.Tick += delegate { _uiTicks++; };
+            uiTimer.Start();
 
             string log = Path.Combine(_p0Root, ".tmp", "webview2-ui.log");
             try { File.AppendAllText(log, "START\n"); } catch { }
@@ -104,6 +121,7 @@ namespace AgentGuildWebView2
                 _webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                     "guild.local", renderer, CoreWebView2HostResourceAccessKind.Allow);
                 _webView.CoreWebView2.WebMessageReceived += OnMessage;
+                _webView.CoreWebView2.NavigationStarting += delegate { _page++; CancelRequests(); };
                 await _webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(BridgeScript());
                 _webView.CoreWebView2.NavigationCompleted += async (sender, e) =>
                 {
@@ -113,6 +131,10 @@ namespace AgentGuildWebView2
                         string js = "window.guild.rpc('projects').then(function(r){"
                             + "window.chrome.webview.postMessage({smoke:true,data:r});"
                             + "}).catch(function(e){window.chrome.webview.postMessage({smoke:false,error:String(e)});});";
+                        if (_smokeCancel)
+                            js = "var probe=window.guild.rpc('projects');setTimeout(function(){probe.cancel();},300);"
+                                + "probe.then(function(){window.chrome.webview.postMessage({smoke:false,error:'expected cancellation'});})"
+                                + ".catch(function(e){window.chrome.webview.postMessage({smoke:String(e).indexOf('unknown')>=0,error:String(e)});});";
                         await _webView.CoreWebView2.ExecuteScriptAsync(js);
                     }
                     if (!string.IsNullOrEmpty(_screenshotPath) && !_screenshotDone)
@@ -158,10 +180,10 @@ namespace AgentGuildWebView2
         {
             return "(function(){"
                 + "var pending={};var seq=0;"
-                + "window.guild={rpc:function(cmd,payload){return new Promise(function(resolve,reject){"
-                + "var id=++seq;pending[id]={resolve:resolve,reject:reject};"
+                + "window.guild={rpc:function(cmd,payload){var id=++seq;var promise=new Promise(function(resolve,reject){"
+                + "pending[id]={resolve:resolve,reject:reject};"
                 + "window.chrome.webview.postMessage({id:id,cmd:cmd,payload:payload||{}});"
-                + "});}};"
+                + "});promise.cancel=function(){return window.guild.rpc('cancel_request',{requestId:id});};return promise;}};"
                 + "window.chrome.webview.addEventListener('message',function(e){"
                 + "var m=e.data;var p=pending[m.id];if(!p)return;delete pending[m.id];"
                 + "if(m.ok){p.resolve(m.data);}else{p.reject(new Error(m.error||'rpc failed'));}"
@@ -169,7 +191,26 @@ namespace AgentGuildWebView2
                 + "})();";
         }
 
-        private static void OnMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+        private static void CancelRequests()
+        {
+            foreach (var request in new List<CancellationTokenSource>(Requests.Values)) request.Cancel();
+        }
+
+        private static void PostResponse(Dictionary<string, object> response)
+        {
+            string encoded;
+            try { encoded = Json.Serialize(response); }
+            catch (Exception)
+            {
+                encoded = Json.Serialize(new {
+                    id = response["id"], ok = false,
+                    error = "Response could not be serialized or exceeded the size limit; result is unknown"
+                });
+            }
+            _webView.CoreWebView2.PostWebMessageAsJson(encoded);
+        }
+
+        private static async void OnMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
             {
@@ -177,6 +218,7 @@ namespace AgentGuildWebView2
                     Json.Deserialize<Dictionary<string, object>>(e.WebMessageAsJson);
                 if (msg.ContainsKey("smoke"))
                 {
+                    msg["uiResponsive"] = _uiResponsive;
                     Console.WriteLine("WEBVIEW2_SMOKE " + Json.Serialize(msg));
                     bool ok = msg.ContainsKey("smoke") && Convert.ToBoolean(msg["smoke"]);
                     Environment.ExitCode = ok ? 0 : 1;
@@ -194,9 +236,33 @@ namespace AgentGuildWebView2
 
                 Dictionary<string, object> response = new Dictionary<string, object>();
                 response["id"] = id;
+                int page = _page;
+                string key = page + ":" + Convert.ToString(id);
+                string mutation = "";
+                CancellationTokenSource cancellation = null;
+                bool ownsMutation = false;
+                int ticksBefore = _uiTicks;
                 try
                 {
-                    object data = RunCommand(cmd, payload);
+                    object data;
+                    if (cmd == "cancel_request")
+                    {
+                        CancellationTokenSource active;
+                        bool found = Requests.TryGetValue(page + ":" + GetString(payload, "requestId", true), out active);
+                        if (found) active.Cancel();
+                        data = new { requested = found, result = "unknown" };
+                    }
+                    else
+                    {
+                        mutation = (cmd == "start_run") ? "task:" + GetString(payload, "taskId", true)
+                            : (cmd == "merge" || cmd == "approve") ? "candidate:" + GetString(payload, "candidateId", true) : "";
+                        if (Requests.ContainsKey(key)) throw new Exception("request already active");
+                        if (mutation != "" && !Mutations.Add(mutation)) throw new Exception("operation already active");
+                        ownsMutation = mutation != "";
+                        cancellation = new CancellationTokenSource();
+                        Requests.Add(key, cancellation);
+                        data = await Task.Run(() => RunCommandAsync(cmd, payload, cancellation.Token));
+                    }
                     response["ok"] = true;
                     response["data"] = data;
                 }
@@ -205,7 +271,14 @@ namespace AgentGuildWebView2
                     response["ok"] = false;
                     response["error"] = ex.Message;
                 }
-                _webView.CoreWebView2.PostWebMessageAsJson(Json.Serialize(response));
+                finally
+                {
+                    if (cancellation != null) { Requests.Remove(key); cancellation.Dispose(); }
+                    if (ownsMutation) Mutations.Remove(mutation);
+                    if (_smoke && cmd == "projects") _uiResponsive = _uiTicks > ticksBefore;
+                }
+                if (!_closing && page == _page && !_webView.IsDisposed)
+                    PostResponse(response);
             }
             catch (Exception ex)
             {
@@ -213,7 +286,7 @@ namespace AgentGuildWebView2
             }
         }
 
-        private static object RunCommand(string cmd, Dictionary<string, object> payload)
+        private static async Task<object> RunCommandAsync(string cmd, Dictionary<string, object> payload, CancellationToken cancellation)
         {
             List<string> args = new List<string>();
             if (cmd == "projects")
@@ -328,15 +401,15 @@ namespace AgentGuildWebView2
                 throw new Exception("unknown command: " + cmd);
             }
 
-            string output = RunPythonCli(args);
-            return Json.DeserializeObject(output);
+            string output = await RunPythonCliAsync(args, cancellation).ConfigureAwait(false);
+            return await Task.Run(() => new JavaScriptSerializer().DeserializeObject(output)).ConfigureAwait(false);
         }
 
-        private static string RunPythonCli(List<string> args)
+        private static Task<string> RunPythonCliAsync(List<string> args, CancellationToken cancellation)
         {
             string python = Environment.GetEnvironmentVariable("PYTHON");
-            if (string.IsNullOrEmpty(python)) python = "python";
             List<string> full = new List<string>();
+            if (string.IsNullOrEmpty(python)) { python = "py.exe"; full.Add("-3"); }
             string db = Environment.GetEnvironmentVariable("GUILD_DB");
             if (!string.IsNullOrEmpty(db))
             {
@@ -345,32 +418,10 @@ namespace AgentGuildWebView2
             }
             full.AddRange(args);
 
-            ProcessStartInfo psi = new ProcessStartInfo();
-            psi.FileName = python;
-            psi.WorkingDirectory = _p0Root;
-            psi.UseShellExecute = false;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            psi.CreateNoWindow = true;
-            psi.StandardOutputEncoding = Encoding.UTF8;
-            psi.StandardErrorEncoding = Encoding.UTF8;
-
-            StringBuilder all = new StringBuilder();
-            all.Append(Quote(Path.Combine(_p0Root, "worker_cli.py")));
-            foreach (string a in full) all.Append(" ").Append(Quote(a));
-            psi.Arguments = all.ToString();
-
-            using (Process p = Process.Start(psi))
-            {
-                string stdout = p.StandardOutput.ReadToEnd();
-                string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit();
-                if (p.ExitCode != 0)
-                {
-                    throw new Exception(string.IsNullOrEmpty(stderr) ? stdout : stderr);
-                }
-                return stdout;
-            }
+            full.Insert(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PYTHON")) ? 1 : 0,
+                Path.Combine(_p0Root, "worker_cli.py"));
+            return AsyncProcessRunner.RunAsync(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AgentGuildJobHost.exe"),
+                python, full.ToArray(), _p0Root, cancellation, TimeSpan.FromMinutes(30));
         }
 
         private static string ArgValue(string[] args, string name)
@@ -396,11 +447,5 @@ namespace AgentGuildWebView2
             return value;
         }
 
-        private static string Quote(string value)
-        {
-            if (value == null) return "\"\"";
-            if (value.IndexOf(' ') < 0 && value.IndexOf('"') < 0) return value;
-            return "\"" + value.Replace("\"", "\\\"") + "\"";
-        }
     }
 }
