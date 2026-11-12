@@ -125,6 +125,39 @@ print(json.dumps(sys.argv[3:],ensure_ascii=False))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_tree_gone('childexit')
 
+    def test_host_killed_during_child_creation_does_not_leave_suspended_orphan(self):
+        # Pause immediately after native creation, before the old separate job assignment.
+        source = (ROOT.parent / 'agent-guild/src/transport/JobHost.cs').read_text(encoding='utf-8')
+        marker = 'out child));'
+        self.assertEqual(source.count(marker), 1)
+        pid_file = self.pid_file('birth')
+        pause = (' System.IO.File.WriteAllText(' + json.dumps(str(pid_file)) +
+                 ', "[" + child.Pid + "]"); System.Threading.Thread.Sleep(30000);')
+        controlled = self.directory / 'BirthHost.cs'
+        controlled.write_text(source.replace(marker, marker + pause), encoding='utf-8')
+        host = self.directory / 'BirthHost.exe'
+        csc = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+        subprocess.run([str(csc), '/nologo', '/platform:x64', '/out:' + str(host), str(controlled)],
+                       check=True, capture_output=True)
+        process = subprocess.Popen([str(host), str(os.getpid()), sys.executable, '-c',
+                                    'import time; time.sleep(60)'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 10
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertTrue(pid_file.exists(), 'child creation was not reached')
+            process.kill()
+            process.wait(timeout=5)
+            self.assert_tree_gone('birth')
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            if pid_file.exists():
+                for pid in json.loads(pid_file.read_text()):
+                    subprocess.run(['taskkill', '/PID', str(pid), '/F'], capture_output=True)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

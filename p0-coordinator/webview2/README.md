@@ -20,7 +20,7 @@ py -3.13 -X utf8 -m unittest test_webview2_process test_webview2_ui -q
 node --test webview2/test-bridge.cjs
 ```
 
-这些测试离线构建真实 C# 代码：9 项进程/管道测试、3 项隐藏窗口测试及 4 项 JavaScript 桥接/界面逻辑测试；不会调用真实模型。`--smoke` 和 `--smoke-cancel` 是测试模式，窗口隐藏，实际交互启动不加这些参数。
+这些测试离线构建真实 C# 代码：10 项进程/管道测试（含创建子进程瞬间杀宿主）、3 项隐藏窗口测试及 4 项 JavaScript 桥接/界面逻辑测试；不会调用真实模型。`--smoke` 和 `--smoke-cancel` 是测试模式，窗口隐藏，实际交互启动不加这些参数。
 
 ## 直接运行
 

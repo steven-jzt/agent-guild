@@ -4,7 +4,7 @@
   "timezone": "Asia/Shanghai",
   "algorithm": "SHA-256",
   "fileCount": 264,
-  "totalBytes": 4271128,
+  "totalBytes": 4274210,
   "note": "不包含自身；路径相对仓库根目录；按 Git 归档内容（Git 规范化字节）计算；Windows 归档需 core.autocrlf=false；排除未跟踪运行时产物。",
   "files": [
     {
@@ -15,7 +15,7 @@
     {
       "path": "README.md",
       "bytes": 12926,
-      "sha256": "66aa53335a07468b451ae6f414a1cf68ffa91fa311ea1744fb6db944d7090bcd"
+      "sha256": "696b2a9feddbd1f49e045a75f7afdf76c23dc5f37346f421b31045fe3eb758ea"
     },
     {
       "path": "agent-guild/.gitignore",
@@ -89,8 +89,8 @@
     },
     {
       "path": "agent-guild/src/transport/JobHost.cs",
-      "bytes": 5922,
-      "sha256": "8d06e7431b29ec3ba97adb7df2df7b223cb86fe3f62dfb24adffc4adc9c324e6"
+      "bytes": 6426,
+      "sha256": "40675a783e5f2832c9da4770d29d21ee4bd7ca3ec0bc304161e4d86c1e91f8a0"
     },
     {
       "path": "agent-guild/src/transport/json-lines.ts",
@@ -184,8 +184,8 @@
     },
     {
       "path": "docs/releases/2026-11-13-p1-integration-ui.md",
-      "bytes": 7002,
-      "sha256": "75d5a9b111cd17c57ddbcb9325ef1d5d909a81db5e5a6cd8b2717205e9e590dc"
+      "bytes": 7629,
+      "sha256": "660897d03b1750feaf773d8af120d203075e684e9d2d975488afa42eb7cb8e0d"
     },
     {
       "path": "docs/归档/交接包_交付验证摘要.json",
@@ -909,8 +909,8 @@
     },
     {
       "path": "p0-coordinator/test_webview2_process.py",
-      "bytes": 5517,
-      "sha256": "abb9b236f2a77ac821d249d77eaab1be33e06d332c0df4ea60f4dd7e8956105a"
+      "bytes": 7428,
+      "sha256": "f135d81b72a0b1fd79512427366200293a451164114bcea7a744723cfc10b423"
     },
     {
       "path": "p0-coordinator/test_webview2_ui.py",
@@ -949,23 +949,23 @@
     },
     {
       "path": "p0-coordinator/webview2/README.md",
-      "bytes": 5856,
-      "sha256": "f3ce1d1fba50deb89e739ec1308c47357b3413d474e77982f87d6f3472de60b5"
+      "bytes": 5896,
+      "sha256": "ab3220ee10ff19d70b64b47a29774a33bb1f79b5a695d9062a7e6055fa7efc39"
     },
     {
       "path": "p0-coordinator/webview2/bin/AgentGuildJobHost.exe",
       "bytes": 7168,
-      "sha256": "ca93ef133e28a685c8973863e6ae07205e9bd0b13904f802f2411c9a7bcea4b1"
+      "sha256": "3b397bf83a41fa7b535ab872c3f1db8308c63a5f8c0619c9b7b957bc7a96056d"
     },
     {
       "path": "p0-coordinator/webview2/bin/AgentGuildWebView2.exe",
       "bytes": 36864,
-      "sha256": "0976e92d9ef32db00b9e607d6b3815d74ff48b498d2f2cad6469d65fb148b14e"
+      "sha256": "7ddf3993cb969cb14ebe145215a09221046da6b763f4aefb79275bdf88305b63"
     },
     {
       "path": "p0-coordinator/webview2/bin/AgentGuildWebView2Cli.exe",
       "bytes": 36864,
-      "sha256": "6bbcbf1809c42fc3d4c2a5159297d2b2760e3801d7aaa3e5359a26c5d5fe2b95"
+      "sha256": "1f801d235f2c8ece15634033eb12645425e4f31f3a39e0c8e8d1ce6cd6e9e347"
     },
     {
       "path": "p0-coordinator/webview2/bin/Microsoft.Web.WebView2.Core.dll",
