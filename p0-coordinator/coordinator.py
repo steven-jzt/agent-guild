@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import semantic
+import managed_workspace
 
 DEFAULT_TTL = 120.0
 APPROVER_ROLE_RANK = {"reviewer": 1, "admin": 2}
@@ -527,6 +528,11 @@ class Coordinator:
                 )
             if "active_batch_id" not in ccols:
                 conn.execute("ALTER TABLE candidates ADD COLUMN active_batch_id TEXT")
+            wcols = {row["name"] for row in conn.execute("PRAGMA table_info(workspaces)")}
+            for col, ddl in (("storage_kind", "TEXT NOT NULL DEFAULT 'legacy_worktree'"),
+                             ("managed_repo_path", "TEXT NOT NULL DEFAULT ''")):
+                if col not in wcols:
+                    conn.execute(f"ALTER TABLE workspaces ADD COLUMN {col} {ddl}")
             mcols = {row["name"] for row in conn.execute("PRAGMA table_info(merge_attempts)")}
             for col, ddl in (
                 ("target_ref", "TEXT NOT NULL DEFAULT 'refs/heads/main'"),
@@ -535,6 +541,7 @@ class Coordinator:
                 ("target_before_sha", "TEXT NOT NULL DEFAULT ''"),
                 ("git_result_sha", "TEXT NOT NULL DEFAULT ''"),
                 ("git_started", "INTEGER NOT NULL DEFAULT 0"),
+                ("result_repo_path", "TEXT NOT NULL DEFAULT ''"),
                 ("target_after_sha", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if col not in mcols:
@@ -1891,6 +1898,7 @@ class Coordinator:
             "target_before_sha": row["target_before_sha"],
             "git_result_sha": row["git_result_sha"],
             "git_started": bool(row["git_started"]),
+            "result_repo_path": row["result_repo_path"],
             "target_after_sha": row["target_after_sha"],
             "requested_by": row["requested_by"],
             "status": row["status"],
@@ -2126,15 +2134,11 @@ class Coordinator:
     def capture_semantic_changes(self, candidate_id: str) -> list[dict]:
         candidate = self.get_candidate(candidate_id)
         with self._conn() as conn:
-            ws = conn.execute(
-                "SELECT * FROM workspaces WHERE task_id=? AND status='active' ORDER BY created_at DESC LIMIT 1",
-                (candidate["task_id"],),
-            ).fetchone()
+            ws = self._candidate_workspace(conn, candidate)
         if ws is None:
             return []
-        changes = semantic.git_changes(
-            ws["repo_path"], candidate["base_sha"], candidate["candidate_sha"],
-        )
+        changes = semantic.git_changes(ws["managed_repo_path"] or ws["repo_path"],
+                                       candidate["base_sha"], candidate["candidate_sha"])
         return self.record_semantic_changes(candidate_id, changes)
 
     def list_semantic_changes(
@@ -2705,30 +2709,46 @@ class Coordinator:
             row = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
             return self._candidate(row)
 
-    def _candidate_repo_path(
-        self, conn: sqlite3.Connection, candidate: sqlite3.Row, repo_path: str | None = None,
-    ) -> Path:
-        """解析候选所属仓库的顶层路径；优先显式路径，其次最近的工作区。"""
-        if repo_path:
-            candidate_path = Path(repo_path).expanduser().resolve()
-        else:
-            row = conn.execute(
-                "SELECT repo_path FROM workspaces WHERE task_id=? AND repo_id=? "
-                "ORDER BY created_at DESC LIMIT 1",
-                (candidate["task_id"], candidate["repo_id"]),
-            ).fetchone()
-            if row is None:
-                raise CoordinatorError(
-                    "repo_path required: candidate has no workspace with a repo path"
-                )
-            candidate_path = Path(row["repo_path"]).resolve()
+    def _candidate_workspace(self, conn, candidate):
+        meta = candidate["meta"] if isinstance(candidate["meta"], dict) else _json_load(candidate["meta"], {})
+        binding = meta.get("workspace_id")
+        if binding:
+            row = conn.execute("SELECT * FROM workspaces WHERE id=?", (binding,)).fetchone()
+            if row is None or row["task_id"] != candidate["task_id"] or row["repo_id"] != candidate["repo_id"]:
+                raise CoordinatorError("candidate workspace binding does not match task/repository")
+            return row
+        rows = conn.execute("SELECT * FROM workspaces WHERE task_id=? AND repo_id=?",
+                            (candidate["task_id"], candidate["repo_id"])).fetchall()
+        if len(rows) > 1:
+            raise CoordinatorError("legacy candidate workspace is ambiguous; preserve and inspect")
+        return rows[0] if rows else None
+
+    def _candidate_repo_path(self, conn, candidate, repo_path=None) -> Path:
+        workspace = self._candidate_workspace(conn, candidate)
+        if not repo_path and workspace is None:
+            raise CoordinatorError("repo_path required: candidate has no workspace with a repo path")
+        candidate_path = Path(repo_path or workspace["repo_path"]).expanduser().resolve()
         if not candidate_path.is_dir():
             raise CoordinatorError(f"repo path not found: {candidate_path}")
-        try:
-            top = self._git(candidate_path, "rev-parse", "--show-toplevel").stdout.strip()
-        except CoordinatorError as exc:
-            raise CoordinatorError(f"not a git repository: {candidate_path}") from exc
-        return Path(top).resolve()
+        top = Path(self._git(candidate_path, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+        if workspace is not None and top != Path(workspace["repo_path"]).resolve():
+            raise CoordinatorError("target repository differs from candidate workspace source")
+        return top
+
+    def _candidate_storage(self, candidate, target):
+        with self._conn() as conn:
+            ws = self._candidate_workspace(conn, candidate)
+        if ws is None or ws["storage_kind"] == "legacy_worktree":
+            return target
+        if ws["status"] != "active":
+            raise CoordinatorError("candidate workspace is not active")
+        path = Path(ws["managed_repo_path"]).resolve()
+        if path != Path(ws["path"]).resolve():
+            raise CoordinatorError("managed repository does not match workspace")
+        common = Path(self._git(path, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()).resolve()
+        if common != path / ".git" or not common.is_dir():
+            raise CoordinatorError("workspace no longer has an independent Git directory")
+        return path
 
     def _resolve_local_target(self, repo_dir: Path, target_ref: str) -> tuple[str, str]:
         """把 target_ref 解析成本地分支的完整 ref 和当前 HEAD SHA。
@@ -2868,7 +2888,7 @@ class Coordinator:
                 if not gate["ok"]:
                     raise CoordinatorError(self._gate_error(gate))
                 if actual != result_sha:
-                    self._git(attempt["repo_path"], "push",
+                    self._git(attempt["result_repo_path"] or attempt["repo_path"], "push",
                               "--receive-pack=git -c receive.denyCurrentBranch=updateInstead receive-pack",
                               "--no-follow-tags", "--recurse-submodules=no",
                               f"--force-with-lease={attempt['target_ref']}:{attempt['target_before_sha']}",
@@ -2949,6 +2969,7 @@ class Coordinator:
         branch = f"guild/merge-{candidate_id.lower()}-{uuid.uuid4().hex[:6]}"
         created = False
         result_sha = ""
+        storage = repo_dir
         try:
             if not repo_dir.is_dir():
                 raise CoordinatorError(f"repo path not found: {repo_dir}")
@@ -2970,15 +2991,17 @@ class Coordinator:
                     target_worktree = next(line[9:] for line in lines if line.startswith("worktree "))
                     if self._git(target_worktree, "status", "--porcelain").stdout.strip():
                         raise CoordinatorError("target worktree is dirty; preserve edits and retry after cleaning")
-            self._git(repo_dir, "merge-base", "--is-ancestor", before, candidate["candidate_sha"])
+            storage = self._candidate_storage(candidate, repo_dir)
+            managed_workspace.validate_location(integration, repo_dir)
+            self._git(storage, "merge-base", "--is-ancestor", before, candidate["candidate_sha"])
             if integration.exists():
                 raise CoordinatorError(f"integration path already exists: {integration}")
             integration.parent.mkdir(parents=True, exist_ok=True)
-            self._git(repo_dir, "worktree", "add", "-b", branch, str(integration), before)
+            self._git(storage, "worktree", "add", "-b", branch, str(integration), before)
             created = True
             # squash 包含 base..candidate 的全部提交，而不是只取最后一次提交。
             self._git(integration, "merge", "--squash", "--no-commit", candidate["candidate_sha"])
-            self._git(integration, "commit", "-m",
+            self._git(integration, "-c", "user.name=AgentGuild", "-c", "user.email=guild@local", "commit", "-m",
                       f"Merge candidate {candidate_id}\n\nCandidate-SHA: {candidate['candidate_sha']}")
             result_sha = self._git(integration, "rev-parse", "HEAD").stdout.strip()
             check_exit = None
@@ -2997,7 +3020,7 @@ class Coordinator:
             if (self._git(integration, "rev-parse", "HEAD").stdout.strip() != result_sha
                     or self._git(integration, "status", "--porcelain", "--untracked-files=no").stdout.strip()
                     or self._git(integration, "rev-parse", "HEAD^{tree}").stdout.strip()
-                    != self._git(repo_dir, "rev-parse", f"{candidate['candidate_sha']}^{{tree}}").stdout.strip()):
+                    != self._git(storage, "rev-parse", f"{candidate['candidate_sha']}^{{tree}}").stdout.strip()):
                 raise CoordinatorError("merge checks changed the reviewed candidate tree or commit")
             with self._conn() as conn:
                 gate = self._evaluate_gate(conn, candidate_id, for_merge=True)
@@ -3008,9 +3031,9 @@ class Coordinator:
             # 准备阶段只保存凭据；finish_merge 才更新 Git 并再次核对目标。
             with self._tx() as conn:
                 changed = conn.execute(
-                    "UPDATE merge_attempts SET repo_path=?, target_before_sha=?, git_result_sha=?, result_sha=? "
+                    "UPDATE merge_attempts SET repo_path=?, target_before_sha=?, git_result_sha=?, result_sha=?, result_repo_path=? "
                     "WHERE id=? AND status='pending' AND git_result_sha=''",
-                    (str(repo_dir), before, result_sha, result_sha, attempt["attempt_id"]),
+                    (str(repo_dir), before, result_sha, result_sha, str(storage), attempt["attempt_id"]),
                 ).rowcount
                 if changed != 1:
                     raise CoordinatorError("merge attempt changed while preparing publication")
@@ -3035,13 +3058,14 @@ class Coordinator:
                 "candidate_sha": candidate["candidate_sha"],
                 "target_ref": target_ref,
                 "target_before_sha": before,
+                "result_repo_path": str(storage),
             }
         except Exception as exc:
             status = "failed"
             self.finish_merge(attempt["attempt_id"], status, "", str(exc))
             if created and status == "failed":
-                self._git(repo_dir, "worktree", "remove", "--force", str(integration), check=False)
-                self._git(repo_dir, "branch", "-D", branch, check=False)
+                self._git(storage, "worktree", "remove", "--force", str(integration), check=False)
+                self._git(storage, "branch", "-D", branch, check=False)
             raise
 
     def list_merge_attempts(self, candidate_id: str | None = None) -> list[dict]:
@@ -3079,6 +3103,8 @@ class Coordinator:
             "execution_id": row["execution_id"],
             "repo_id": row["repo_id"],
             "repo_path": row["repo_path"],
+            "storage_kind": row["storage_kind"],
+            "managed_repo_path": row["managed_repo_path"],
             "path": row["path"],
             "branch": row["branch"],
             "base_sha": row["base_sha"],
@@ -3111,29 +3137,37 @@ class Coordinator:
         top = self._git(repo_dir, "rev-parse", "--show-toplevel").stdout.strip()
         repo_dir = Path(top).resolve()
         resolved_base = self._git(repo_dir, "rev-parse", f"{base_sha}^{{commit}}").stdout.strip()
-        branch = branch or f"guild/{task_id.lower()}-{uuid.uuid4().hex[:6]}"
-        if path is None:
-            path = str(repo_dir.parent / ".guild-worktrees" / branch.replace("/", "-"))
-        worktree = Path(path).resolve()
-        if worktree.exists():
-            raise CoordinatorError(f"worktree path already exists: {worktree}")
-        worktree.parent.mkdir(parents=True, exist_ok=True)
-        self._git(repo_dir, "worktree", "add", "-b", branch, str(worktree), resolved_base)
-
+        workspace_id = "W-" + uuid.uuid4().hex[:12]
+        branch = branch or f"guild/{workspace_id.lower()}"
+        worktree = Path(path).resolve() if path else managed_workspace.default_path(workspace_id).resolve()
+        dirty = bool(self._git(repo_dir, "status", "--porcelain").stdout.strip())
+        # Gitlinks need an explicit hydration policy; never silently hand an incomplete task to an agent.
+        if any(line.startswith("160000 ") for line in self._git(repo_dir, "ls-tree", "-r", resolved_base).stdout.splitlines()):
+            raise CoordinatorError("submodule workspaces are not supported yet")
+        try:
+            managed_workspace.create(self._git, repo_dir, worktree, workspace_id, resolved_base, branch)
+        except (ValueError, OSError) as exc:
+            raise CoordinatorError(str(exc)) from exc
         now = _now()
-        workspace_id = "W-" + uuid.uuid4().hex[:8]
-        with self._tx() as conn:
-            conn.execute(
-                "INSERT INTO workspaces(id, task_id, execution_id, repo_id, repo_path, path, "
-                "branch, base_sha, status, created_at) VALUES (?,?,?,?,?,?,?,?, 'active', ?)",
-                (workspace_id, task_id, execution_id, repo_id, str(repo_dir),
-                 str(worktree), branch, resolved_base, now),
-            )
-            self._event(conn, "workspace_created", task_id, "system",
-                        {"workspace_id": workspace_id, "repo_id": repo_id,
-                         "path": str(worktree), "branch": branch, "base_sha": resolved_base})
-            row = conn.execute("SELECT * FROM workspaces WHERE id=?", (workspace_id,)).fetchone()
-            return self._workspace(row)
+        try:
+            with self._tx() as conn:
+                conn.execute(
+                    "INSERT INTO workspaces(id, task_id, execution_id, repo_id, repo_path, path, "
+                    "branch, base_sha, status, created_at, storage_kind, managed_repo_path) "
+                    "VALUES (?,?,?,?,?,?,?,?, 'active', ?, 'independent_clone', ?)",
+                    (workspace_id, task_id, execution_id, repo_id, str(repo_dir),
+                     str(worktree), branch, resolved_base, now, str(worktree)),
+                )
+                self._event(conn, "workspace_created", task_id, "system",
+                            {"workspace_id": workspace_id, "repo_id": repo_id,
+                             "path": str(worktree), "source_dirty": dirty, "base_sha": resolved_base})
+                row = conn.execute("SELECT * FROM workspaces WHERE id=?", (workspace_id,)).fetchone()
+                result = self._workspace(row)
+                result["warnings"] = ["Source has uncommitted changes; only committed content was cloned"] if dirty else []
+                return result
+        except Exception:
+            managed_workspace.remove_owned(worktree, repo_dir, workspace_id)
+            raise
 
     def get_workspace(self, workspace_id: str) -> dict:
         with self._conn() as conn:
@@ -3238,8 +3272,8 @@ class Coordinator:
         if not author_execution_id:
             with self._conn() as conn:
                 row = conn.execute(
-                    "SELECT id FROM executions WHERE task_id=? ORDER BY rowid DESC LIMIT 1",
-                    (ws["task_id"],),
+                    "SELECT id FROM executions WHERE task_id=? AND workspace=? ORDER BY rowid DESC LIMIT 1",
+                    (ws["task_id"], ws["path"]),
                 ).fetchone()
                 if row is not None:
                     author_execution_id = row["id"]
@@ -3249,7 +3283,7 @@ class Coordinator:
             ws["base_sha"],
             head,
             author_execution_id=author_execution_id,
-            meta=meta,
+            meta={**(meta or {}), "workspace_id": workspace_id},
         )
         self._capture_semantic_best_effort(candidate["candidate_id"])
         return candidate
@@ -3269,24 +3303,41 @@ class Coordinator:
                 pass
 
     def remove_workspace(self, workspace_id: str, force: bool = True) -> dict:
-        ws = self.get_workspace(workspace_id)
-        if ws["status"] == "removed":
-            return ws
-        args = ["worktree", "remove"]
-        if force:
-            args.append("--force")
-        args.append(ws["path"])
-        self._git(ws["repo_path"], *args, check=False)
-        now = _now()
         with self._tx() as conn:
-            conn.execute(
-                "UPDATE workspaces SET status='removed', removed_at=? WHERE id=?",
-                (now, workspace_id),
-            )
-            self._event(conn, "workspace_removed", ws["task_id"], "system",
-                        {"workspace_id": workspace_id, "path": ws["path"]})
             row = conn.execute("SELECT * FROM workspaces WHERE id=?", (workspace_id,)).fetchone()
-            return self._workspace(row)
+            if row is None:
+                raise CoordinatorError(f"unknown workspace: {workspace_id}")
+            ws = self._workspace(row)
+            if ws["status"] == "removed":
+                return ws
+            running = conn.execute("SELECT id, workspace FROM executions WHERE task_id=? AND status='running'",
+                                   (ws["task_id"],)).fetchall()
+            if any(not r["workspace"] or Path(r["workspace"]).resolve() == Path(ws["path"]).resolve() for r in running):
+                raise CoordinatorError("workspace has a running execution; reconcile before removal")
+            for candidate in conn.execute("SELECT id,meta,status FROM candidates WHERE task_id=?", (ws["task_id"],)):
+                meta = candidate["meta"] if isinstance(candidate["meta"], dict) else _json_load(candidate["meta"], {})
+                binding = meta.get("workspace_id")
+                if binding not in (None, workspace_id):
+                    continue
+                if candidate["status"] not in ("merged", "rejected", "invalidated"):
+                    raise CoordinatorError("workspace retains an unmerged candidate; preserve it")
+                if conn.execute("SELECT 1 FROM merge_attempts WHERE candidate_id=? AND status IN ('pending','unknown')",
+                                (candidate["id"],)).fetchone():
+                    raise CoordinatorError("workspace has an unresolved merge; reconcile before removal")
+            try:
+                if not force and self._git(ws["path"], "status", "--porcelain").stdout.strip():
+                    raise CoordinatorError("workspace is dirty; preserve edits or explicitly force removal")
+                if ws["storage_kind"] == "independent_clone":
+                    managed_workspace.remove_owned(ws["path"], ws["repo_path"], workspace_id)
+                else:
+                    args = ["worktree", "remove"] + (["--force"] if force else []) + [ws["path"]]
+                    self._git(ws["repo_path"], *args)
+            except (ValueError, OSError) as exc:
+                raise CoordinatorError(str(exc)) from exc
+            now = _now()
+            conn.execute("UPDATE workspaces SET status='removed', removed_at=? WHERE id=?", (now, workspace_id))
+            self._event(conn, "workspace_removed", ws["task_id"], "system", {"workspace_id": workspace_id, "path": ws["path"]})
+            return self._workspace(conn.execute("SELECT * FROM workspaces WHERE id=?", (workspace_id,)).fetchone())
 
     # ---------- 验证 ----------
     def record_verification(

@@ -74,9 +74,24 @@ class GitMergeTest(unittest.TestCase):
 
     def tearDown(self):
         for path in (self.base / "wt", self.base / "integration"):
-            if path.exists():
-                git(self.repo, "worktree", "remove", "--force", str(path)) if self.repo.exists() else None
+            if path == self.base / "integration" and path.exists():
+                subprocess.run(["git", "-C", str(path), "worktree", "remove", "--force", str(path)], capture_output=True)
         shutil.rmtree(self.base, ignore_errors=True)
+
+    def test_prepare_keeps_source_git_metadata_and_objects_unchanged(self):
+        before = {key: git(self.repo, *args) for key, args in {
+            'refs': ('show-ref',), 'worktrees': ('worktree', 'list', '--porcelain'),
+            'index': ('ls-files', '--stage'), 'config': ('config', '--local', '--list')}.items()}
+        result = self.c.merge_candidate_git(self.cand_id, str(self.repo), str(self.base / 'integration'))
+        after = {key: git(self.repo, *args) for key, args in {
+            'refs': ('show-ref',), 'worktrees': ('worktree', 'list', '--porcelain'),
+            'index': ('ls-files', '--stage'), 'config': ('config', '--local', '--list')}.items()}
+        self.assertEqual(before, after)
+        probe = subprocess.run(['git','-C',str(self.repo),'cat-file','-e',result['result_sha']], capture_output=True)
+        self.assertNotEqual(probe.returncode, 0)
+        self.assertEqual(Path(result['result_repo_path']), Path(self.ws['path']))
+        self.c.finish_merge(self.attempt['attempt_id'], 'succeeded', result['result_sha'])
+        self.assertEqual(git(self.repo,'rev-parse','main'),result['result_sha'])
 
     def test_merge_success(self):
         result = self.c.merge_candidate_git(
@@ -242,6 +257,7 @@ class GitMergeTest(unittest.TestCase):
         task = self.c.create_task(project["project_id"], "release", ["src"], repo_id="repo1")
         execution = self.c.start_execution(task["id"], "fixture")
         self.c.finish_execution(execution["execution_id"], "succeeded")
+        git(self.repo, "fetch", "--no-write-fetch-head", self.ws["path"], self.head)
         candidate = self.c.create_candidate(task["id"], "repo1", self.base_sha, self.head,
                                             author_execution_id=execution["execution_id"])
         cid = candidate["candidate_id"]

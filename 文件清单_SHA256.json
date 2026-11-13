@@ -3,8 +3,8 @@
   "generatedAt": "2026-11-13",
   "timezone": "Asia/Shanghai",
   "algorithm": "SHA-256",
-  "fileCount": 264,
-  "totalBytes": 4274210,
+  "fileCount": 267,
+  "totalBytes": 4293481,
   "note": "不包含自身；路径相对仓库根目录；按 Git 归档内容（Git 规范化字节）计算；Windows 归档需 core.autocrlf=false；排除未跟踪运行时产物。",
   "files": [
     {
@@ -14,8 +14,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 12926,
-      "sha256": "696b2a9feddbd1f49e045a75f7afdf76c23dc5f37346f421b31045fe3eb758ea"
+      "bytes": 13334,
+      "sha256": "32c1b361c6924bcdb7f1d487572437211c1e678a06a6cc0c385856ab71c67ef7"
     },
     {
       "path": "agent-guild/.gitignore",
@@ -186,6 +186,11 @@
       "path": "docs/releases/2026-11-13-p1-integration-ui.md",
       "bytes": 7629,
       "sha256": "660897d03b1750feaf773d8af120d203075e684e9d2d975488afa42eb7cb8e0d"
+    },
+    {
+      "path": "docs/releases/2026-11-13-p2-1-isolated-workspaces.md",
+      "bytes": 3282,
+      "sha256": "5f234a5fbf573edc5e57a2f52a3f98b9a96bc5a82f6e29f09bdd6a48334ca561"
     },
     {
       "path": "docs/归档/交接包_交付验证摘要.json",
@@ -549,8 +554,8 @@
     },
     {
       "path": "p0-coordinator/README.md",
-      "bytes": 32222,
-      "sha256": "1e6dddd15a06eec9d5e631704e557a40e41082db354fee778d387d18a5ae6501"
+      "bytes": 32541,
+      "sha256": "a63df8ea94733e0ca45e7d01d0c6210c0b09f0de7865c3a329d676b95a5d7652"
     },
     {
       "path": "p0-coordinator/adapter_cli.py",
@@ -599,8 +604,8 @@
     },
     {
       "path": "p0-coordinator/coordinator.py",
-      "bytes": 169109,
-      "sha256": "05335f6a97db4b7140c0615e4fadb4a7fd253dbd3bf88384c312c56c191d72ba"
+      "bytes": 173920,
+      "sha256": "1aa21039999ed146fb3ae93fcd66b755446ebec2aa4e50563037dd795cda63e7"
     },
     {
       "path": "p0-coordinator/demo.py",
@@ -788,6 +793,11 @@
       "sha256": "a076bd5de839ca242371d7717e696aa9989cb25cbf0053e043c09b51f64cb5e6"
     },
     {
+      "path": "p0-coordinator/managed_workspace.py",
+      "bytes": 2487,
+      "sha256": "081220ed24e5fbbd598c7c1b125ccbb1678a4cb6847c78ad7df21c3a19d43a63"
+    },
+    {
       "path": "p0-coordinator/mcp_server.py",
       "bytes": 38975,
       "sha256": "182641a5aee4179905c4673ab55d588517a68ffccfb425ef00f9ad71ca892adb"
@@ -863,6 +873,11 @@
       "sha256": "997a78cd20ffc73fc82e1eed78e6daf4d11b1c62a8084aa9473c36430d8267e2"
     },
     {
+      "path": "p0-coordinator/test_managed_workspace.py",
+      "bytes": 6444,
+      "sha256": "63060a23063f7150326fd1e802916492978635d25d6ac8b9b819d02f510ea485"
+    },
+    {
       "path": "p0-coordinator/test_or_router.py",
       "bytes": 2906,
       "sha256": "0be190ea9053615718cdedabda1d1d28146a857407142bbf92ea65910d24207b"
@@ -889,8 +904,8 @@
     },
     {
       "path": "p0-coordinator/test_v1_git_merge.py",
-      "bytes": 16621,
-      "sha256": "93c5c253762f2465039eba60b0100c57ab45e2d6f92f9fa096ac0f7bd69fbda2"
+      "bytes": 17896,
+      "sha256": "7b42f2b9f48c1130014ad61f69e940a782779e6afa29b49560ee8b9db11e8ca5"
     },
     {
       "path": "p0-coordinator/test_v1_lifecycle.py",
@@ -899,8 +914,8 @@
     },
     {
       "path": "p0-coordinator/test_v1_worktree.py",
-      "bytes": 4984,
-      "sha256": "819ff944e1855e826f6de3e4e1c7514eafaa2782b75af5b711e0c52c3ead522f"
+      "bytes": 5231,
+      "sha256": "dc6ed3755f131a1e0173464e05eed88d45183ce35d2f873e39b5cada5302b7f7"
     },
     {
       "path": "p0-coordinator/test_verifier.py",
@@ -999,8 +1014,8 @@
     },
     {
       "path": "p0-coordinator/worker_cli.py",
-      "bytes": 27564,
-      "sha256": "50607b5fe89a3fc5655427f93502376659c8e5b65721f26e8e019c445f6ca0b6"
+      "bytes": 27562,
+      "sha256": "67b1e74c09828822a7bbdec687536eadc0ae36c64e8af8767b3f3c9df7d618bc"
     },
     {
       "path": "p0-coordinator/worktree_demo.py",
