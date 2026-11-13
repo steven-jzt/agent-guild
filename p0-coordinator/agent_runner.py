@@ -13,6 +13,7 @@ from pathlib import Path
 
 from adapters import CodexAppServerAdapter, CodexExecAdapter, DshAdapter, extract_usage
 from coordinator import Coordinator, CoordinatorError
+from recovery import execution_owner
 
 P0 = Path(__file__).resolve().parent
 DEEPSEEK_HOME = P0 / ".tmp" / "codex-deepseek-home"
@@ -96,7 +97,7 @@ def run_agent(
         )
 
     adapter, canonical = _adapter(agent)
-    execution = coord.start_execution(task_id, canonical, workspace=ws["path"])
+    execution = coord.start_execution(task_id, canonical, workspace=ws["path"], meta=execution_owner())
     run = adapter.start(
         task_id, ws["path"], prompt=prompt,
         env=_adapter_env(agent),

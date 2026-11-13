@@ -21,6 +21,7 @@ namespace AgentGuildWebView2
         private static string _p0Root;
         private static bool _smoke;
         private static bool _smokeDone;
+        private static bool _smokeRecovery;
         private static string _screenshotPath;
         private static bool _screenshotDone;
         private static string _dumpTextPath;
@@ -39,7 +40,8 @@ namespace AgentGuildWebView2
             Console.OutputEncoding = new UTF8Encoding(false);
             _smoke = Array.IndexOf(args, "--smoke") >= 0;
             _smokeCancel = Array.IndexOf(args, "--smoke-cancel") >= 0;
-            _smoke = _smoke || _smokeCancel;
+            _smokeRecovery = Array.IndexOf(args, "--smoke-recovery") >= 0;
+            _smoke = _smoke || _smokeCancel || _smokeRecovery;
             _screenshotPath = ArgValue(args, "--screenshot");
             _dumpTextPath = ArgValue(args, "--dump-text");
             _p0Root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", ".."));
@@ -58,6 +60,14 @@ namespace AgentGuildWebView2
                     AddIf(payload, "check", ArgValue(args, "--check"));
                     AddIf(payload, "prompt", ArgValue(args, "--prompt"));
                     AddIf(payload, "targetRef", ArgValue(args, "--target-ref"));
+                    AddIf(payload, "projectId", ArgValue(args, "--project"));
+                    AddIf(payload, "executionId", ArgValue(args, "--execution"));
+                    AddIf(payload, "generation", ArgValue(args, "--generation"));
+                    AddIf(payload, "reason", ArgValue(args, "--reason"));
+                    AddIf(payload, "attemptId", ArgValue(args, "--attempt"));
+                    AddIf(payload, "action", ArgValue(args, "--action"));
+                    AddIf(payload, "resultSha", ArgValue(args, "--result-sha"));
+                    payload["confirmLocalStopped"] = Array.IndexOf(args, "--confirm-local-stopped") >= 0;
                     object data = RunCommandAsync(call, payload, CancellationToken.None).GetAwaiter().GetResult();
                     Console.WriteLine(Json.Serialize(data));
                     Environment.ExitCode = 0;
@@ -135,6 +145,10 @@ namespace AgentGuildWebView2
                             js = "var probe=window.guild.rpc('projects');setTimeout(function(){probe.cancel();},300);"
                                 + "probe.then(function(){window.chrome.webview.postMessage({smoke:false,error:'expected cancellation'});})"
                                 + ".catch(function(e){window.chrome.webview.postMessage({smoke:String(e).indexOf('unknown')>=0,error:String(e)});});";
+                        if (_smokeRecovery)
+                            js = "window.guild.rpc('recovery').then(function(r){state.recovery=r;renderRecovery();"
+                                + "window.chrome.webview.postMessage({smoke:document.getElementById('recoveryRows').innerText.indexOf('进程归属需手工核对')>=0,data:r});"
+                                + "}).catch(function(e){window.chrome.webview.postMessage({smoke:false,error:String(e)});});";
                         await _webView.CoreWebView2.ExecuteScriptAsync(js);
                     }
                     if (!string.IsNullOrEmpty(_screenshotPath) && !_screenshotDone)
@@ -256,6 +270,8 @@ namespace AgentGuildWebView2
                     {
                         mutation = (cmd == "start_run") ? "task:" + GetString(payload, "taskId", true)
                             : (cmd == "merge" || cmd == "approve") ? "candidate:" + GetString(payload, "candidateId", true) : "";
+                        if (cmd == "reconcile_execution") mutation = "execution:" + GetString(payload, "executionId", true);
+                        if (cmd == "reconcile_merge") mutation = "attempt:" + GetString(payload, "attemptId", true);
                         if (Requests.ContainsKey(key)) throw new Exception("request already active");
                         if (mutation != "" && !Mutations.Add(mutation)) throw new Exception("operation already active");
                         ownsMutation = mutation != "";
@@ -387,6 +403,30 @@ namespace AgentGuildWebView2
                 }
                 args.Add("--finish");
             }
+            else if (cmd == "recovery")
+            {
+                args.Add("recovery-report");
+                string project = GetString(payload, "projectId", false);
+                if (!string.IsNullOrEmpty(project)) { args.Add("--project"); args.Add(project); }
+            }
+            else if (cmd == "reconcile_execution")
+            {
+                args.Add("reconcile-execution");
+                args.Add("--execution"); args.Add(GetString(payload, "executionId", true));
+                args.Add("--generation"); args.Add(GetString(payload, "generation", true));
+                args.Add("--reason"); args.Add(GetString(payload, "reason", true));
+                if (payload.ContainsKey("confirmLocalStopped") && object.Equals(payload["confirmLocalStopped"], true))
+                    args.Add("--confirm-local-stopped");
+            }
+            else if (cmd == "reconcile_merge")
+            {
+                args.Add("reconcile-merge");
+                args.Add("--attempt"); args.Add(GetString(payload, "attemptId", true));
+                args.Add("--action"); args.Add(GetString(payload, "action", true));
+                args.Add("--result-sha"); args.Add(GetString(payload, "resultSha", true));
+                string reason = GetString(payload, "reason", false);
+                if (!string.IsNullOrEmpty(reason)) { args.Add("--reason"); args.Add(reason); }
+            }
             else if (cmd == "status")
             {
                 string projectId = payload != null && payload.ContainsKey("projectId")
@@ -413,6 +453,7 @@ namespace AgentGuildWebView2
             string db = Environment.GetEnvironmentVariable("GUILD_DB");
             if (!string.IsNullOrEmpty(db))
             {
+                db = Path.GetFullPath(Path.IsPathRooted(db) ? db : Path.Combine(_p0Root, db));
                 full.Add("--db");
                 full.Add(db);
             }
@@ -421,7 +462,8 @@ namespace AgentGuildWebView2
             full.Insert(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PYTHON")) ? 1 : 0,
                 Path.Combine(_p0Root, "worker_cli.py"));
             return AsyncProcessRunner.RunAsync(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AgentGuildJobHost.exe"),
-                python, full.ToArray(), _p0Root, cancellation, TimeSpan.FromMinutes(30));
+                python, full.ToArray(), _p0Root, cancellation, TimeSpan.FromMinutes(30),
+                Path.Combine(string.IsNullOrEmpty(db) ? Path.Combine(_p0Root, "data") : Path.GetDirectoryName(Path.GetFullPath(db)), "request-receipts"));
         }
 
         private static string ArgValue(string[] args, string name)

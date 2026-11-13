@@ -14,7 +14,8 @@ namespace AgentGuildWebView2
             {
                 string host = args[0], python = args[1], fixture = args[2], mode = args[3], pidFile = args[4];
                 var run = AsyncProcessRunner.RunAsync(host, python, new[] { fixture, mode, pidFile, "中文 空格\"引号\\" },
-                    Path.GetDirectoryName(fixture), cancel.Token, TimeSpan.FromSeconds(mode == "timeout" ? 2 : 15));
+                    Path.GetDirectoryName(fixture), cancel.Token, TimeSpan.FromSeconds(mode == "timeout" ? 2 : 15),
+                    Path.Combine(Path.GetDirectoryName(fixture), "request-receipts"));
                 if (mode == "parallel")
                 {
                     var quick = AsyncProcessRunner.RunAsync(host, python, new[] { fixture, "echo", pidFile },
@@ -23,7 +24,7 @@ namespace AgentGuildWebView2
                         throw new Exception("quick request was blocked by the long request");
                     await quick;
                 }
-                if (mode == "cancel")
+                if (mode == "cancel" || mode == "recovery-cancel")
                 {
                     for (int n = 0; !File.Exists(pidFile) && n < 1000; n++) await Task.Delay(10);
                     if (!File.Exists(pidFile)) throw new Exception("fixture did not start");

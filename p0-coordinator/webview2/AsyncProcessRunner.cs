@@ -59,8 +59,24 @@ namespace AgentGuildWebView2
             return text.ToString();
         }
 
+        private static void WriteReceipt(string path, string requestId, int pid, string started, string state)
+        {
+            // All string values are generated GUIDs, decimal FILETIME values or fixed states.
+            string json = "{\"version\":1,\"ownership_version\":2,\"request_id\":\"" + requestId
+                + "\",\"host_pid\":" + pid + ",\"host_started\":\"" + started
+                + "\",\"state\":\"" + state + "\"}";
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, json, new UTF8Encoding(false));
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+
         internal static async Task<string> RunAsync(string host, string executable, string[] args,
-            string cwd, CancellationToken cancellation, TimeSpan timeout)
+            string cwd, CancellationToken cancellation, TimeSpan timeout, string receiptDirectory = null)
         {
             cancellation.ThrowIfCancellationRequested();
             var command = new StringBuilder();
@@ -72,6 +88,16 @@ namespace AgentGuildWebView2
                 StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
             };
             info.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            string receiptPath = null, requestId = Guid.NewGuid().ToString("N");
+            if (receiptDirectory != null)
+            {
+                receiptDirectory = Path.GetFullPath(receiptDirectory);
+                Directory.CreateDirectory(receiptDirectory);
+                receiptPath = Path.Combine(receiptDirectory, requestId + ".json");
+                WriteReceipt(receiptPath, requestId, 0, "", "starting");
+                info.EnvironmentVariables["GUILD_REQUEST_ID"] = requestId;
+                info.EnvironmentVariables["GUILD_REQUEST_RECEIPT"] = receiptPath;
+            }
             using (var process = new Process { StartInfo = info, EnableRaisingEvents = true })
             using (var deadline = new CancellationTokenSource(timeout))
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token))
@@ -80,6 +106,14 @@ namespace AgentGuildWebView2
                 var stop = new TaskCompletionSource<bool>();
                 process.Exited += delegate { exited.TrySetResult(true); };
                 process.Start();
+                string hostStarted = "";
+                string receiptState = "unknown";
+                try
+                {
+                    hostStarted = process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString();
+                    if (receiptPath != null) WriteReceipt(receiptPath, requestId, process.Id, hostStarted, "running");
+                }
+                catch { Kill(process); throw; }
                 process.StandardInput.Close();
                 var stdout = DrainAsync(process.StandardOutput);
                 var stderr = DrainAsync(process.StandardError);
@@ -98,6 +132,7 @@ namespace AgentGuildWebView2
                             throw new TimeoutException("Process exited but pipes did not close; result is unknown");
                         string[] output = await drains.ConfigureAwait(false);
                         await Task.WhenAll(stdoutGuard, stderrGuard).ConfigureAwait(false);
+                        receiptState = cancellation.IsCancellationRequested || deadline.IsCancellationRequested ? "stopped" : "exited";
                         if (cancellation.IsCancellationRequested)
                             throw new OperationCanceledException("Local process tree stopped; business result is unknown", cancellation);
                         if (deadline.IsCancellationRequested)
@@ -110,6 +145,13 @@ namespace AgentGuildWebView2
                     finally
                     {
                         Kill(process);
+                        // An incomplete receipt stays unknown; it never fabricates business completion.
+                        if (receiptPath != null)
+                        {
+                            try { WriteReceipt(receiptPath, requestId, process.Id, hostStarted, receiptState); }
+                            catch (IOException) { }
+                            catch (UnauthorizedAccessException) { }
+                        }
                     }
                 }
             }

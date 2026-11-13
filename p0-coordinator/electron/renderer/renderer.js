@@ -15,11 +15,13 @@ async function runAction(key, command, payload) {
   pendingActions.set(key, request);
   renderTasks();
   renderCandidates();
+  renderRecovery();
   try { return await request; }
   finally {
     pendingActions.delete(key);
     renderTasks();
     renderCandidates();
+    renderRecovery();
   }
 }
 
@@ -52,6 +54,7 @@ const state = {
   runs: [],
   adapters: [],
   metrics: {},
+  recovery: { executions: [], merges: [] },
 };
 
 const CANDIDATE_COLORS = {
@@ -188,11 +191,12 @@ async function loadProjectData() {
 
 async function loadAll() {
   await loadProjects();
-  const tasks = [loadProjectData(), window.guild.rpc('candidates'), window.guild.rpc('runs'), window.guild.rpc('adapters')];
-  const [, candidates, runs, adapters] = await Promise.all(tasks);
+  const tasks = [loadProjectData(), window.guild.rpc('candidates'), window.guild.rpc('runs'), window.guild.rpc('adapters'), window.guild.rpc('recovery', { projectId: projectSelect.value })];
+  const [, candidates, runs, adapters, recovery] = await Promise.all(tasks);
   state.candidates = candidates || [];
   state.runs = runs || [];
   state.adapters = adapters || [];
+  state.recovery = recovery && Array.isArray(recovery.executions) ? recovery : { executions: [], merges: [] };
   renderAll();
 }
 
@@ -206,6 +210,7 @@ function renderAll() {
   renderAgents();
   renderCandidates();
   renderAdapters();
+  renderRecovery();
 }
 
 function renderKpis() {
@@ -352,6 +357,68 @@ function renderCandidates() {
   }).join('');
 }
 
+function renderRecovery() {
+  const rows = state.recovery || { executions: [], merges: [] };
+  const localText = { running: '本地进程仍在运行', stopped: '所属本地进程已退出', unknown: '进程归属需手工核对' };
+  const mergeText = { published: '目标已是准备结果，待补全记录', prepared: '已准备，尚未合入',
+    unprepared: '准备未完成，需核对工作区', target_changed: '目标已变化，禁止恢复', unknown: '无法确认目标状态' };
+  const executions = rows.executions.map(e => {
+    const busy = pendingActions.has(`execution:${e.execution_id}`);
+    const enabled = !busy && (e.can_reconcile || e.manual_confirmation_allowed);
+    return `<div class="candidate">
+      <div class="c-top"><span class="c-id">${esc(e.execution_id)}</span><span>${esc(localText[e.local_state] || '待核对')}</span></div>
+      <div class="c-task">${esc(e.task_id)} · 第 ${esc(e.generation)} 次执行</div>
+      <div class="c-task">工作区：${esc(e.workspace || '未记录')}<br>改动（前20项）：${(e.workspace_changes || []).slice(0,20).map(esc).join('、') || '无已识别改动'}${e.workspace_error ? '<br>' + esc(e.workspace_error) : ''}</div>
+      <label>核对说明 <input id="recovery-reason-${esc(e.execution_id)}" placeholder="检查进程与工作区后填写" /></label>
+      ${e.manual_confirmation_allowed ? `<label><input type="checkbox" id="recovery-confirm-${esc(e.execution_id)}" />我已手工确认本地执行及其子进程均已停止</label>` : ''}
+      <div class="c-actions"><button class="btn ghost" data-recovery="execution" data-id="${esc(e.execution_id)}" ${enabled ? '' : 'disabled'}>记录中断，保留工作区</button></div>
+    </div>`;
+  });
+  const merges = rows.merges.map(m => `<div class="candidate">
+    <div class="c-top"><span class="c-id">${esc(m.attempt_id)}</span><span>${esc(mergeText[m.recovery_state] || '待核对')}</span></div>
+    <div class="c-task">${esc(m.candidate_id)} · ${esc(m.target_ref)}<br>目标：${esc(m.repo_path)}<br>实际 SHA：${esc(m.actual_target_sha || '未知')}<br>准备 SHA：${esc(m.git_result_sha || '尚无凭据')}${m.inspection_error ? '<br>' + esc(m.inspection_error) : ''}</div>
+    <div class="c-actions">
+      ${m.can_confirm ? `<button class="btn green" data-recovery="confirm" data-id="${esc(m.attempt_id)}" ${pendingActions.has('attempt:' + m.attempt_id) ? 'disabled' : ''}>确认已合入并补全记录</button>` : ''}
+      ${m.can_abandon ? `<button class="btn ghost" data-recovery="abandon" data-id="${esc(m.attempt_id)}" ${pendingActions.has('attempt:' + m.attempt_id) ? 'disabled' : ''}>放弃本次合入，保留候选</button>` : ''}
+    </div></div>`);
+  $('recoveryRows').innerHTML = executions.concat(merges).join('') || '<div class="empty">暂无待核对记录</div>';
+}
+
+async function reconcileExecution(id) {
+  const row = state.recovery.executions.find(e => e.execution_id === id);
+  if (!row || row.local_state === 'running') throw new Error('执行状态已变化或进程仍在运行，请刷新核对');
+  const reason = $('recovery-reason-' + id).value.trim();
+  const manual = row.manual_confirmation_allowed && $('recovery-confirm-' + id).checked;
+  if (!reason || (!row.can_reconcile && !manual)) throw new Error('请填写核对说明，并明确确认本地执行已停止');
+  const result = await runAction(`execution:${id}`, 'reconcile_execution', {
+    executionId: id, generation: row.generation, reason, confirmLocalStopped: Boolean(manual),
+  });
+  if (result.status !== 'interrupted') throw new Error('收尾结果尚未确认，请刷新');
+  showNotice('已记录中断；工作区和文件预约保留，检查改动后再决定下一步。');
+  await loadAll();
+}
+
+async function reconcileMerge(id, action) {
+  const row = state.recovery.merges.find(m => m.attempt_id === id);
+  if (!row || (action === 'confirm' ? !row.can_confirm : !row.can_abandon)) throw new Error('合入状态已变化，请刷新核对');
+  const result = await runAction(`attempt:${id}`, 'reconcile_merge', {
+    attemptId: id, action, resultSha: row.git_result_sha,
+    reason: action === 'abandon' ? '用户显式放弃准备结果，保留候选与工作区' : '',
+  });
+  if (result.status !== (action === 'confirm' ? 'succeeded' : 'failed')) throw new Error('合入恢复结果尚未确认，请刷新');
+  showNotice(action === 'confirm' ? '已核对真实目标并补全合入记录。' : '已放弃本次合入；没有回滚代码，候选与工作区保留。');
+  await loadAll();
+}
+
+$('recoveryRows').addEventListener('click', async event => {
+  const button = event.target.closest('button[data-recovery]');
+  if (!button || button.disabled) return;
+  try {
+    if (button.dataset.recovery === 'execution') await reconcileExecution(button.dataset.id);
+    else await reconcileMerge(button.dataset.id, button.dataset.recovery);
+  } catch (err) { try { await loadAll(); } catch (_) { } showError(err); }
+});
+
 async function startRun(taskId, button) {
   const check = checkInput.value.trim() || button.dataset.check || '';
   if (!check) {
@@ -372,6 +439,7 @@ async function startRun(taskId, button) {
     }
     await loadAll();
   } catch (err) {
+    try { await loadAll(); } catch (_) { }
     showError(err);
   } finally {
     button.disabled = false;
@@ -449,8 +517,7 @@ $('refresh').addEventListener('click', refresh);
 projectSelect.addEventListener('change', async () => {
   try {
     applyProjectRole();
-    await loadProjectData();
-    renderAll();
+    await loadAll();
   } catch (err) { showError(err); }
 });
 $('saveSettings').addEventListener('click', () => {

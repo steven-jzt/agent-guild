@@ -169,3 +169,7 @@ WebView2 用 Edge 的 Chromium，绕开 Electron 运行时。
 - `electron/` 保留，供能跑 Electron 的机器使用；
 - `webview2/` 是本机可用的桌面壳；
 - 两者共用 `electron/renderer` 的 HTML/CSS/JS 和 Python CLI 桥思路。
+
+## 停止后的核对与恢复（P2-2）
+
+启动或刷新读取 recovery-report，只核对而不自动重跑。新请求把 JobHost PID/创建时间保存在 DB 旁的 request-receipts，worker 将自身归属写入 Execution.meta。界面可显式收尾、确认已发布合入或放弃未发布准备；操作前检查工作区。旧记录需手工确认，仍运行的进程不能覆盖。恢复入口不撤销远端模型任务，也不回滚代码。详见[交付说明](../../docs/releases/2026-11-13-p2-2-recovery.md)。新增 --smoke-recovery 测试模式用真实隐藏窗口验证恢复区域；窗口/native CLI 共 5 项，进程回归 12 项，桥接 7 项。

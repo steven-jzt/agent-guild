@@ -311,6 +311,53 @@ class GitMergeTest(unittest.TestCase):
         self.assertFalse((self.base / "second").exists())
         self.c.finish_merge(self.attempt["attempt_id"], "succeeded", result["result_sha"])
 
+    def test_recovery_does_not_publish_a_prepared_result(self):
+        result = self.c.merge_candidate_git(self.cand_id, str(self.repo), str(self.base / 'integration'))
+        row = self.c.recovery_report()['merges'][0]
+        self.assertEqual(row['recovery_state'], 'prepared')
+        self.assertTrue(row['can_abandon'])
+        with self.assertRaisesRegex(CoordinatorError, 'will not publish'):
+            self.c.reconcile_merge(self.attempt['attempt_id'], 'confirm', result['result_sha'])
+        self.assertEqual(git(self.repo, 'rev-parse', 'main'), self.base_sha)
+
+    def test_recovery_confirms_published_receipt_after_database_failure(self):
+        result = self.c.merge_candidate_git(self.cand_id, str(self.repo), str(self.base / 'integration'))
+        original = self.c._event
+        def injected(conn, kind, *args, **kwargs):
+            if kind == 'merge_succeeded':
+                raise RuntimeError('injected publication event failure')
+            return original(conn, kind, *args, **kwargs)
+        with patch.object(self.c, '_event', side_effect=injected):
+            with self.assertRaises(RuntimeError):
+                self.c.finish_merge(self.attempt['attempt_id'], 'succeeded', result['result_sha'])
+        reopened = Coordinator(self.base / 'db.sqlite')
+        row = reopened.recovery_report()['merges'][0]
+        self.assertEqual(row['recovery_state'], 'published')
+        self.assertTrue(row['can_confirm'])
+        confirmed = reopened.reconcile_merge(row['attempt_id'], 'confirm', row['git_result_sha'])
+        self.assertEqual(confirmed['status'], 'succeeded')
+        self.assertEqual(reopened.recovery_report()['merges'], [])
+
+    def test_recovery_abandons_only_current_prepared_receipt_without_target_change(self):
+        result = self.c.merge_candidate_git(self.cand_id, str(self.repo), str(self.base / 'integration'))
+        with self.assertRaises(CoordinatorError):
+            self.c.reconcile_merge(self.attempt['attempt_id'], 'abandon', self.head, 'stale SHA')
+        out = self.c.reconcile_merge(self.attempt['attempt_id'], 'abandon', result['result_sha'], 'operator abandoned preparation')
+        self.assertEqual(out['status'], 'failed')
+        self.assertEqual(git(self.repo, 'rev-parse', 'main'), self.base_sha)
+        self.assertTrue((self.base / 'wt/src/earlier.py').exists())
+
+    def test_recovery_refuses_a_target_changed_after_inspection(self):
+        result = self.c.merge_candidate_git(self.cand_id, str(self.repo), str(self.base / 'integration'))
+        (self.repo / 'concurrent.txt').write_text('later target')
+        git(self.repo, 'add', '.')
+        git(self.repo, 'commit', '-m', 'concurrent')
+        before = git(self.repo, 'rev-parse', 'HEAD')
+        self.assertEqual(self.c.recovery_report()['merges'][0]['recovery_state'], 'target_changed')
+        with self.assertRaises(CoordinatorError):
+            self.c.reconcile_merge(self.attempt['attempt_id'], 'confirm', result['result_sha'])
+        self.assertEqual(git(self.repo, 'rev-parse', 'HEAD'), before)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -14,6 +14,23 @@ process.parentPort.on('message', (event) => {
         if (!msg.payload || !msg.payload.projectId) throw new Error('projectId required');
         data = runCli(['status', '--project', msg.payload.projectId]);
         break;
+      case 'recovery':
+        data = runCli(msg.payload?.projectId ? ['recovery-report', '--project', msg.payload.projectId] : ['recovery-report']);
+        break;
+      case 'reconcile_execution': {
+        const p = msg.payload || {};
+        const args = ['reconcile-execution', '--execution', p.executionId, '--generation', String(p.generation), '--reason', p.reason];
+        if (p.confirmLocalStopped === true) args.push('--confirm-local-stopped');
+        data = runCli(args);
+        break;
+      }
+      case 'reconcile_merge': {
+        const p = msg.payload || {};
+        const args = ['reconcile-merge', '--attempt', p.attemptId, '--action', p.action, '--result-sha', p.resultSha];
+        if (p.reason) args.push('--reason', p.reason);
+        data = runCli(args);
+        break;
+      }
       case 'adapters':
         data = runCli(['adapters']);
         break;

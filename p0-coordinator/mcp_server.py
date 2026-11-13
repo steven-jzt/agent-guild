@@ -17,7 +17,6 @@ from typing import Any
 
 from coordinator import Coordinator, CoordinatorError
 from estimate import summarize
-from plan_milp import pareto_front, pareto_front_3d, solve_plan
 from verifier import auto_verify
 
 ROOT = Path(__file__).resolve().parent
@@ -717,6 +716,19 @@ TOOLS = [
     },
 ]
 
+TOOLS.extend([
+    {"name": "recovery_report", "description": "只读核对未结束执行和合入，不自动重跑。",
+     "inputSchema": {"type": "object", "properties": {"project_id": {"type": "string"}}}},
+    {"name": "reconcile_execution", "description": "核对本地进程与工作区后结束遗留执行；旧记录需显式确认。",
+     "inputSchema": {"type": "object", "properties": {"execution_id": {"type": "string"},
+        "generation": {"type": "integer"}, "reason": {"type": "string"}, "confirm_local_stopped": {"type": "boolean"}},
+        "required": ["execution_id", "generation", "reason"]}},
+    {"name": "reconcile_merge", "description": "确认已发布的合入记录，或显式放弃准备结果；不重新发布。",
+     "inputSchema": {"type": "object", "properties": {"attempt_id": {"type": "string"},
+        "action": {"type": "string", "enum": ["confirm", "abandon"]}, "result_sha": {"type": "string"},
+        "reason": {"type": "string"}}, "required": ["attempt_id", "action", "result_sha"]}},
+])
+
 
 def send(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -724,6 +736,18 @@ def send(payload: dict) -> None:
 
 
 def call_tool(c: Coordinator, name: str, args: dict[str, Any]) -> Any:
+    if name in ("plan_milp", "plan_front", "plan_front_3d"):
+        try:
+            from plan_milp import pareto_front, pareto_front_3d, solve_plan
+        except ModuleNotFoundError as exc:
+            raise CoordinatorError("MILP requires the optional PuLP dependency") from exc
+    if name == "recovery_report":
+        return c.recovery_report(args.get("project_id"))
+    if name == "reconcile_execution":
+        return c.reconcile_execution(args["execution_id"], args["generation"], args["reason"],
+                                     confirm_local_stopped=args.get("confirm_local_stopped", False))
+    if name == "reconcile_merge":
+        return c.reconcile_merge(args["attempt_id"], args["action"], args["result_sha"], args.get("reason", ""))
     if name == "create_project":
         return c.create_project(
             args["name"],
