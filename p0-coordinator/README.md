@@ -386,3 +386,7 @@ node electron/smoke_cli.js
 $env:ELECTRON_RUN_AS_NODE=$null
 .\node_modules\electron\dist\electron.exe --no-sandbox --disable-gpu --version
 ```
+
+## P2-1：独立工作区
+
+新工作区默认为独立克隆；repo_path 为源路径，managed_repo_path 为副本，storage_kind 区分新旧。旧 worktree 不自动迁移。创建、清理、候选绑定、合入准备与发布边界见[第一轮交付](../docs/releases/2026-11-13-p2-1-isolated-workspaces.md)。

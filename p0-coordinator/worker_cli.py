@@ -296,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--result-sha", default="")
     p.add_argument("--error", default="")
 
-    p = sub.add_parser("merge-candidate-git", help="从目标 HEAD cherry-pick 并可选完成合入")
+    p = sub.add_parser("merge-candidate-git", help="准备完整候选并可选确认合入")
     p.add_argument("--candidate", required=True)
     p.add_argument("--repo-path", required=True)
     p.add_argument("--worktree", required=True)
@@ -320,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("merge-attempts", help="查看 MergeAttempt")
     p.add_argument("--candidate")
 
-    p = sub.add_parser("create-workspace", help="创建 git worktree")
+    p = sub.add_parser("create-workspace", help="创建独立 Git 工作区")
     p.add_argument("--task", required=True)
     p.add_argument("--repo", required=True)
     p.add_argument("--repo-path", required=True)

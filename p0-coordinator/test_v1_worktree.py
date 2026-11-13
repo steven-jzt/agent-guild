@@ -70,6 +70,10 @@ class WorktreeTest(unittest.TestCase):
         self.assertEqual(candidate["base_sha"], self.base_sha)
         self.assertEqual(candidate["candidate_sha"], head)
 
+        with self.assertRaises(CoordinatorError):
+            self.c.remove_workspace(ws["workspace_id"])
+        self.c.freeze_candidate(candidate["candidate_id"])
+        self.c.invalidate_candidate(candidate["candidate_id"], "discard fixture")
         removed = self.c.remove_workspace(ws["workspace_id"])
         self.assertEqual(removed["status"], "removed")
         listing = git(self.repo, "worktree", "list", "--porcelain")
