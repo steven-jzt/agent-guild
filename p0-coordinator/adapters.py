@@ -573,7 +573,7 @@ class CodexAppServerAdapter(BaseAdapter):
 
     默认使用 workspace-write + on-request，保留审批通道；不再写死
     danger-full-access / approvalPolicy=never。sandbox 只允许通过
-    CODEX_APP_SERVER_SANDBOX 显式覆盖，审批策略始终为 on-request。
+    CODEX_APP_SERVER_SANDBOX 或实例参数显式覆盖，审批策略始终为 on-request。
     """
 
     name = "codex-appserver"
@@ -586,6 +586,7 @@ class CodexAppServerAdapter(BaseAdapter):
         command: list[str] | None = None,
         approval_handler: Callable[[str, dict], dict | None] | None = None,
         late_event_grace: float = 0.2,
+        sandbox: str | None = None,
     ):
         raw = os.environ.get("CODEX_APP_SERVER_CMD", "").strip()
         cmd = command or (
@@ -593,6 +594,7 @@ class CodexAppServerAdapter(BaseAdapter):
             else ["codex", "app-server", "--listen", "stdio://"]
         )
         self.command = cmd
+        self._sandbox_override = sandbox
         self.approval_handler = approval_handler
         self.late_event_grace = max(0.0, float(late_event_grace))
         self._runs: dict[str, dict] = {}
@@ -600,7 +602,7 @@ class CodexAppServerAdapter(BaseAdapter):
         self._finished_server_requests: dict[str, list[dict]] = {}
 
     def sandbox_mode(self) -> str:
-        value = os.environ.get("CODEX_APP_SERVER_SANDBOX", self.DEFAULT_SANDBOX).strip()
+        value = (self._sandbox_override if self._sandbox_override is not None else os.environ.get("CODEX_APP_SERVER_SANDBOX", self.DEFAULT_SANDBOX)).strip()
         if value not in self.SANDBOX_MODES:
             raise AdapterError(f"invalid CODEX_APP_SERVER_SANDBOX: {value}")
         return value
@@ -622,7 +624,7 @@ class CodexAppServerAdapter(BaseAdapter):
                     auth = f"provider: {match.group(1)}"
         return {"name": self.name, "available": True, "executable": exe,
                 "command": self.command, "auth": auth, "transport": "stdio",
-                "sandbox": os.environ.get("CODEX_APP_SERVER_SANDBOX", self.DEFAULT_SANDBOX),
+                "sandbox": self.sandbox_mode(),
                 "approval_policy": self.APPROVAL_POLICY}
 
     def start(self, task_id: str, workspace: str, env: dict | None = None,

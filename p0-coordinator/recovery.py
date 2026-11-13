@@ -95,7 +95,7 @@ def report(coord, project_id=None):
             ex = coord._execution(raw)
             latest = conn.execute('SELECT MAX(generation) FROM executions WHERE task_id=?', (ex['task_id'],)).fetchone()[0]
             state = inspect_execution(ex, Path(coord.db_path).resolve().parent / 'request-receipts')
-            current = ex['generation'] == latest and ex['role'] == 'author'
+            current = ex['generation'] == latest and ex['role'] in ('author', 'reviewer')
             workspace = next((w for w in coord.list_workspaces(ex['task_id']) if w['path'] == ex['workspace']), None)
             changes, error = [], ''
             if workspace:

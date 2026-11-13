@@ -194,6 +194,9 @@ async function loadAll() {
   const tasks = [loadProjectData(), window.guild.rpc('candidates'), window.guild.rpc('runs'), window.guild.rpc('adapters'), window.guild.rpc('recovery', { projectId: projectSelect.value })];
   const [, candidates, runs, adapters, recovery] = await Promise.all(tasks);
   state.candidates = candidates || [];
+  await Promise.all(state.candidates.filter(c => c.status !== 'building').map(async c => {
+    c.reviewState = await window.guild.rpc('reviews', { candidateId: c.candidate_id });
+  }));
   state.runs = runs || [];
   state.adapters = adapters || [];
   state.recovery = recovery && Array.isArray(recovery.executions) ? recovery : { executions: [], merges: [] };
@@ -338,23 +341,57 @@ function renderCandidates() {
     return;
   }
   $('candidateCards').innerHTML = state.candidates.map((c) => {
+    const reviewState = c.reviewState || {};
+    const reviews = reviewState.reviews || [];
+    const latest = reviews[reviews.length - 1];
+    const reviewing = latest && latest.status === 'running';
     const busy = pendingActions.has(`candidate:${c.candidate_id}`);
-    const canApprove = !busy && c.status === 'awaiting_human';
+    const canApprove = !busy && !reviewing && reviewState.gate?.ok && c.status === 'awaiting_human';
     const canMerge = !busy && c.status === 'approved' && hasPaths();
+    const reviewChecks = (reviewState.gate?.required_checks || []).filter(item => item.kind === 'review');
+    const canReview = !busy && !reviewing && ['validating', 'awaiting_human'].includes(c.status);
     return `
       <div class="candidate">
         <div class="c-top"><span class="c-id">${esc(c.candidate_id)}</span>${pill(textOf(CANDIDATE_TEXT, c.status), candidateTone(c.status))}</div>
         <div class="c-task">${esc(c.task_id)} · ${esc(c.task_title || '')}</div>
         ${c.approved_by ? `<div class="c-task">批准：${esc(c.approved_by)} · ${esc(c.approver_role || 'reviewer')}</div>` : ''}
         <div class="c-sha mono">${esc((c.candidate_sha || '').slice(0, 14))}</div>
+        ${renderReview(reviewState, busy)}
         ${c.status === 'approved' && !hasPaths() ? '<div class="c-task">先填写运行设置，或点“填入示例”</div>' : ''}
         <div class="c-actions">
           ${busy ? cancelButton(`candidate:${c.candidate_id}`) : ''}
+          ${canReview ? (reviewChecks.length ? reviewChecks : [{id:'agent-review'}]).map(check => `<button class="btn" data-action="review" data-id="${esc(c.candidate_id)}" data-check-id="${esc(check.id)}">开始审查 · ${esc(check.id)}</button>`).join('') : ''}
           ${canApprove ? `<button class="btn green" data-action="approve" data-id="${esc(c.candidate_id)}">批准</button>` : ''}
           ${canMerge ? `<button class="btn" data-action="merge" data-id="${esc(c.candidate_id)}">合入</button>` : ''}
         </div>
       </div>`;
   }).join('');
+}
+
+function renderReview(data, busy) {
+  const latest = (data.reviews || []).slice(-1)[0];
+  const report = latest?.report || {};
+  const local = state.recovery?.executions?.find(e => e.execution_id === latest?.execution_id)?.local_state;
+  const runningText = !busy && local === 'stopped' ? '审查已停止，待核对收尾'
+    : !busy && local === 'unknown' ? '审查状态待核对，请查看恢复面板' : '审查中 / 请等待结果';
+  const status = busy || latest?.status === 'running' ? runningText
+    : latest ? ({pass:'通过', request_changes:'请求修改', unknown:'未取得有效结论'}[latest.decision] || '未取得有效结论') : '等待审查';
+  const labels = {passed:'通过',missing:'待检查',failed:'未通过',invalid_review:'审查无效'};
+  return `<div class="c-task">${(data.gate?.items || []).map(item => `${esc(item.id)}：${esc(labels[item.status] || item.status)}`).join(' · ')}</div>
+    <div class="c-task">${esc(status)}${latest?.simulated ? ' · 离线模拟，仅用于验收' : ''}</div>
+    ${latest ? `<details><summary>审查报告 · ${esc(latest.execution_id)}</summary>
+      <div class="c-task">${esc(report.summary || report.error || '')}</div>
+      ${(report.findings || []).map(f => `<div class="c-task">${esc(f.severity)} · ${esc(f.path)}:${esc(f.line)} — ${esc(f.message)}</div>`).join('')}
+      <div class="c-sha mono">${esc(latest.report_path || '中断后请到恢复面板核对收尾')}</div>
+      <div class="c-sha mono">SHA ${esc(latest.candidate_sha)} · 批次 ${esc(latest.batch_id)} · ${esc(latest.check_id)}</div></details>` : ''}`;
+}
+
+async function reviewCandidate(candidateId, checkId = 'agent-review') {
+  try {
+    const result = await runAction(`candidate:${candidateId}`, 'review_candidate', { candidateId, checkId, timeout: 180 });
+    showNotice(result.decision === 'pass' ? '审查通过；仍需人工批准和独立合入。'
+      : result.decision === 'request_changes' ? '审查发现问题，请阅读报告后修改。' : '审查未取得有效结论，请核对报告和恢复状态。');
+  } finally { await loadAll(); }
 }
 
 function renderRecovery() {
@@ -367,7 +404,7 @@ function renderRecovery() {
     const enabled = !busy && (e.can_reconcile || e.manual_confirmation_allowed);
     return `<div class="candidate">
       <div class="c-top"><span class="c-id">${esc(e.execution_id)}</span><span>${esc(localText[e.local_state] || '待核对')}</span></div>
-      <div class="c-task">${esc(e.task_id)} · 第 ${esc(e.generation)} 次执行</div>
+      <div class="c-task">${esc(e.task_id)} · 第 ${esc(e.generation)} 次执行 · ${e.role === 'reviewer' ? '审查运行（收尾不改变作者结果）' : '作者运行'}</div>
       <div class="c-task">工作区：${esc(e.workspace || '未记录')}<br>改动（前20项）：${(e.workspace_changes || []).slice(0,20).map(esc).join('、') || '无已识别改动'}${e.workspace_error ? '<br>' + esc(e.workspace_error) : ''}</div>
       <label>核对说明 <input id="recovery-reason-${esc(e.execution_id)}" placeholder="检查进程与工作区后填写" /></label>
       ${e.manual_confirmation_allowed ? `<label><input type="checkbox" id="recovery-confirm-${esc(e.execution_id)}" />我已手工确认本地执行及其子进程均已停止</label>` : ''}
@@ -494,6 +531,7 @@ $('candidateCards').addEventListener('click', async (event) => {
   button.disabled = true;
   try {
     if (button.dataset.action === 'approve') await approveCandidate(button.dataset.id);
+    if (button.dataset.action === 'review') await reviewCandidate(button.dataset.id, button.dataset.checkId);
     if (button.dataset.action === 'merge') await mergeCandidate(button.dataset.id);
   } catch (err) {
     showError(err);
