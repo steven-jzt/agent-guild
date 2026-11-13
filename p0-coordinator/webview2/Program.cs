@@ -22,6 +22,7 @@ namespace AgentGuildWebView2
         private static bool _smoke;
         private static bool _smokeDone;
         private static bool _smokeRecovery;
+        private static bool _smokeReview;
         private static string _screenshotPath;
         private static bool _screenshotDone;
         private static string _dumpTextPath;
@@ -41,7 +42,8 @@ namespace AgentGuildWebView2
             _smoke = Array.IndexOf(args, "--smoke") >= 0;
             _smokeCancel = Array.IndexOf(args, "--smoke-cancel") >= 0;
             _smokeRecovery = Array.IndexOf(args, "--smoke-recovery") >= 0;
-            _smoke = _smoke || _smokeCancel || _smokeRecovery;
+            _smokeReview = Array.IndexOf(args, "--smoke-review") >= 0;
+            _smoke = _smoke || _smokeCancel || _smokeRecovery || _smokeReview;
             _screenshotPath = ArgValue(args, "--screenshot");
             _dumpTextPath = ArgValue(args, "--dump-text");
             _p0Root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", ".."));
@@ -53,6 +55,8 @@ namespace AgentGuildWebView2
                 {
                     Dictionary<string, object> payload = new Dictionary<string, object>();
                     AddIf(payload, "candidateId", ArgValue(args, "--candidate"));
+                    AddIf(payload, "checkId", ArgValue(args, "--check-id"));
+                    AddIf(payload, "timeout", ArgValue(args, "--timeout"));
                     AddIf(payload, "taskId", ArgValue(args, "--task"));
                     AddIf(payload, "repoPath", ArgValue(args, "--repo-path"));
                     AddIf(payload, "worktreePath", ArgValue(args, "--worktree"));
@@ -149,6 +153,21 @@ namespace AgentGuildWebView2
                             js = "window.guild.rpc('recovery').then(function(r){state.recovery=r;renderRecovery();"
                                 + "window.chrome.webview.postMessage({smoke:document.getElementById('recoveryRows').innerText.indexOf('进程归属需手工核对')>=0,data:r});"
                                 + "}).catch(function(e){window.chrome.webview.postMessage({smoke:false,error:String(e)});});";
+                        if (_smokeReview)
+                            js = "(async function(){try{await loadAll();var c=state.candidates[0];"
+                                + "var button=document.querySelector('[data-action=review]');if(!button)throw Error('review button missing');button.click();"
+                                + "var running=false;for(var i=0;i<100;i++){await new Promise(r=>setTimeout(r,100));"
+                                + "var s=await window.guild.rpc('reviews',{candidateId:c.candidate_id});"
+                                + "if(s.reviews.some(r=>r.status==='running')){running=true;break;}}"
+                                + "if(!running)throw Error('running state missing');"
+                                + "if(" + (Environment.GetEnvironmentVariable("GUILD_REVIEW_OFFLINE_SCENARIO") == "timeout" ? "true" : "false") + ")await cancelAction('candidate:'+c.candidate_id);"
+                                + "for(var i=0;i<150 && pendingActions.size;i++)await new Promise(r=>setTimeout(r,100));"
+                                + "if(pendingActions.size)throw Error('request not settled');await loadAll();"
+                                + "var text=document.getElementById('candidateCards').innerText;"
+                                + "var s=state.candidates[0].reviewState;var last=s.reviews.slice(-1)[0];"
+                                + "var interrupted=last.status==='running'&&state.recovery.executions.some(e=>e.role==='reviewer');"
+                                + "window.chrome.webview.postMessage({smoke:text.indexOf('离线模拟')>=0&&(interrupted||last.report_path.length>0),data:s,interrupted:interrupted});"
+                                + "}catch(e){window.chrome.webview.postMessage({smoke:false,error:String(e)});}})();";
                         await _webView.CoreWebView2.ExecuteScriptAsync(js);
                     }
                     if (!string.IsNullOrEmpty(_screenshotPath) && !_screenshotDone)
@@ -269,7 +288,7 @@ namespace AgentGuildWebView2
                     else
                     {
                         mutation = (cmd == "start_run") ? "task:" + GetString(payload, "taskId", true)
-                            : (cmd == "merge" || cmd == "approve") ? "candidate:" + GetString(payload, "candidateId", true) : "";
+                            : (cmd == "merge" || cmd == "approve" || cmd == "review_candidate") ? "candidate:" + GetString(payload, "candidateId", true) : "";
                         if (cmd == "reconcile_execution") mutation = "execution:" + GetString(payload, "executionId", true);
                         if (cmd == "reconcile_merge") mutation = "attempt:" + GetString(payload, "attemptId", true);
                         if (Requests.ContainsKey(key)) throw new Exception("request already active");
@@ -402,6 +421,18 @@ namespace AgentGuildWebView2
                     args.Add(check);
                 }
                 args.Add("--finish");
+            }
+            else if (cmd == "review_candidate" || cmd == "reviews")
+            {
+                args.Add(cmd == "reviews" ? "reviews" : "review-candidate");
+                args.Add("--candidate"); args.Add(GetString(payload, "candidateId", true));
+                if (cmd == "review_candidate")
+                {
+                    string checkId = GetString(payload, "checkId", false);
+                    string timeout = GetString(payload, "timeout", false);
+                    if (!string.IsNullOrEmpty(checkId)) { args.Add("--check-id"); args.Add(checkId); }
+                    if (!string.IsNullOrEmpty(timeout)) { args.Add("--timeout"); args.Add(timeout); }
+                }
             }
             else if (cmd == "recovery")
             {

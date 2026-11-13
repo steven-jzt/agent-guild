@@ -1,5 +1,7 @@
 # Agent Guild WebView2 壳
 
+本轮新增候选“开始审查”、检查状态、报告详情（问题等级/文件/行号/原因）与离线标识。RPC `review_candidate` 接受 `candidateId`、`checkId`、`timeout`，`reviews` 返回报告和门禁。审查中禁止批准，停止后通过恢复面板显式收尾 reviewer，保留作者结果；不自动重试。详见 [P2-3 交付说明](../../docs/releases/2026-11-13-p2-3-agent-review.md)。
+
 ![控制台](../../pilot/ui-dashboard.png)
 
 这是 Electron 的替代桌面壳。  

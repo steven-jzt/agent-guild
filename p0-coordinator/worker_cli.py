@@ -246,6 +246,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("freeze-candidate", help="冻结 Candidate")
     p.add_argument("--candidate", required=True)
 
+    p = sub.add_parser("review-candidate", help="手动启动独立只读审查，不批准或合入")
+    p.add_argument("--candidate", required=True)
+    p.add_argument("--check-id", default="agent-review")
+    p.add_argument("--timeout", type=float, default=180)
+
+    p = sub.add_parser("reviews", help="查看候选审查、报告和门禁")
+    p.add_argument("--candidate", required=True)
+
     p = sub.add_parser("record-evidence", help="记录绑定 candidate_sha 的证据")
     p.add_argument("--candidate", required=True)
     p.add_argument("--type", required=True)
@@ -540,6 +548,12 @@ def run(args) -> object:
         )
     if args.cmd == "freeze-candidate":
         return coord.freeze_candidate(args.candidate)
+    if args.cmd == "review-candidate":
+        from agent_review import review_candidate
+        return review_candidate(coord, args.candidate, args.check_id, args.timeout)
+    if args.cmd == "reviews":
+        return {"reviews": coord.list_reviews(args.candidate),
+                "gate": coord.evaluate_candidate_gate(args.candidate)}
     if args.cmd == "record-evidence":
         return coord.record_evidence(
             args.candidate, args.type, args.command, args.cwd,
