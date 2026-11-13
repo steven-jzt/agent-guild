@@ -370,11 +370,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--task")
 
+    p = sub.add_parser("recovery-report", help="只读核对未结束执行与合入，不自动重跑")
+    p.add_argument("--project")
+    p = sub.add_parser("reconcile-execution", help="核对后将遗留执行结束为 interrupted")
+    p.add_argument("--execution", required=True)
+    p.add_argument("--generation", type=int, required=True)
+    p.add_argument("--reason", required=True)
+    p.add_argument("--confirm-local-stopped", action="store_true")
+    p = sub.add_parser("reconcile-merge", help="仅确认已发布的合入或显式放弃准备结果")
+    p.add_argument("--attempt", required=True)
+    p.add_argument("--action", choices=["confirm", "abandon"], required=True)
+    p.add_argument("--result-sha", required=True)
+    p.add_argument("--reason", default="")
+
     return ap
 
 
 def run(args) -> object:
     coord = Coordinator(args.db)
+    if args.cmd == "recovery-report":
+        return coord.recovery_report(args.project)
+    if args.cmd == "reconcile-execution":
+        return coord.reconcile_execution(args.execution, args.generation, args.reason,
+                                         confirm_local_stopped=args.confirm_local_stopped)
+    if args.cmd == "reconcile-merge":
+        return coord.reconcile_merge(args.attempt, args.action, args.result_sha, args.reason)
     if args.cmd == "create-project":
         return coord.create_project(
             args.name, args.require_approval, args.require_verification,

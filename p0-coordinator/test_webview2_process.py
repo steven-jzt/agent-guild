@@ -30,7 +30,13 @@ class WebViewProcessTest(unittest.TestCase):
         cls.fixture = cls.directory / 'fixture.py'
         cls.fixture.write_text('''import json,os,subprocess,sys,time
 mode,pid_file=sys.argv[1:3]
-if mode in ('cancel','timeout','owner','childexit'):
+if mode=='recovery-cancel':
+    sys.path.insert(0,os.environ['GUILD_RECOVERY_P0'])
+    from coordinator import Coordinator
+    from recovery import execution_owner
+    coord=Coordinator(os.environ['GUILD_RECOVERY_DB'])
+    coord.start_execution(os.environ['GUILD_RECOVERY_TASK'],'controlled',meta=execution_owner())
+if mode in ('cancel','timeout','owner','childexit','recovery-cancel'):
     child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])
     with open(pid_file+'.tmp','w') as f: json.dump([os.getpid(),child.pid],f)
     os.replace(pid_file+'.tmp',pid_file)
@@ -41,6 +47,8 @@ elif mode=='flood':
     print(json.dumps({'out':'o'*1048576})); sys.exit(0)
 elif mode=='limit': print('x'*3145728); sys.exit(0)
 elif mode=='error': sys.stderr.write('fixture failure'); sys.exit(7)
+elif mode=='receipt':
+    print(json.dumps({'id':os.environ.get('GUILD_REQUEST_ID'), 'path':os.environ.get('GUILD_REQUEST_RECEIPT')})); sys.exit(0)
 print(json.dumps(sys.argv[3:],ensure_ascii=False))
 ''', encoding='utf-8')
 
@@ -75,6 +83,36 @@ print(json.dumps(sys.argv[3:],ensure_ascii=False))
         result = self.run_mode('echo')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), ['中文 空格"引号\\'])
+
+    def test_request_receipt_matches_child_and_identifies_exited_host(self):
+        from recovery import process_state
+        result = self.run_mode('receipt')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        owner = json.loads(result.stdout)
+        self.assertTrue(owner['id'])
+        receipt = json.loads(Path(owner['path']).read_text())
+        self.assertEqual(receipt['request_id'], owner['id'])
+        self.assertEqual(receipt['ownership_version'], 2)
+        self.assertEqual(receipt['state'], 'exited')
+        self.assertEqual(process_state(receipt['host_pid'], receipt['host_started']), 'stopped')
+
+    def test_cancelled_real_worker_is_recoverable_without_manual_process_assertion(self):
+        from coordinator import Coordinator
+        coord = Coordinator(self.directory / 'recovery.sqlite')
+        project = coord.create_project('offline recovery')
+        task = coord.create_task(project['project_id'], 'controlled worker', ['a.txt'])
+        result = subprocess.run(self.command('recovery-cancel'), capture_output=True, encoding='utf-8', timeout=25,
+                                env={**os.environ, 'GUILD_RECOVERY_DB': coord.db_path,
+                                     'GUILD_RECOVERY_TASK': task['id'], 'GUILD_RECOVERY_P0': str(ROOT)})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        report = coord.recovery_report(project['project_id'])
+        self.assertEqual(len(report['executions']), 1)
+        row = report['executions'][0]
+        self.assertEqual(row['local_state'], 'stopped')
+        self.assertTrue(row['can_reconcile'])
+        out = coord.reconcile_execution(row['execution_id'], row['generation'], 'offline worker and tree checked')
+        self.assertEqual(out['status'], 'interrupted')
+        self.assert_tree_gone('recovery-cancel')
 
     def test_both_pipes_are_drained_without_deadlock(self):
         result = self.run_mode('flood')

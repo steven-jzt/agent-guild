@@ -390,3 +390,7 @@ $env:ELECTRON_RUN_AS_NODE=$null
 ## P2-1：独立工作区
 
 新工作区默认为独立克隆；repo_path 为源路径，managed_repo_path 为副本，storage_kind 区分新旧。旧 worktree 不自动迁移。创建、清理、候选绑定、合入准备与发布边界见[第一轮交付](../docs/releases/2026-11-13-p2-1-isolated-workspaces.md)。
+
+## P2-2：停止后的核对与恢复
+
+界面增加恢复区；CLI/MCP 提供 recovery-report、reconcile-execution 和 reconcile-merge。旧记录需人工明确确认，已识别运行中的进程禁止收尾，合入恢复不重新发布。归属凭据存放在数据库旁的 request-receipts 目录；完整接口、测试与限制见[第二轮交付](../docs/releases/2026-11-13-p2-2-recovery.md)。

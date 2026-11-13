@@ -25,6 +25,7 @@ from typing import Any, Iterable
 
 import semantic
 import managed_workspace
+import recovery
 
 DEFAULT_TTL = 120.0
 APPROVER_ROLE_RANK = {"reviewer": 1, "admin": 2}
@@ -1614,31 +1615,70 @@ class Coordinator:
         allowed = {"succeeded", "failed", "cancelled", "interrupted"}
         if status not in allowed:
             raise CoordinatorError(f"invalid execution status: {status}")
-        now = _now()
         with self._tx() as conn:
-            execution = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
-            if execution is None:
-                raise CoordinatorError(f"unknown execution: {execution_id}")
-            if execution["status"] != "running":
-                raise CoordinatorError(f"execution is not running: {execution['status']}")
-            conn.execute(
-                "UPDATE executions SET status=?, ended_at=?, exit_reason=?, meta=? WHERE id=?",
-                (status, now, exit_reason,
-                 json.dumps(meta if meta is not None else _json_load(execution["meta"], {}), ensure_ascii=False),
-                 execution_id),
-            )
-            target = {
-                "succeeded": "auto_review",
-                "failed": "needs_fix",
-                "cancelled": "cancelled",
-                "interrupted": "needs_fix",
-            }[status]
-            self._transition_in_tx(conn, execution["task_id"], target, f"execution_{status}")
-            self._event(conn, "execution_finished", execution["task_id"], execution["agent"],
-                        {"execution_id": execution_id, "status": status,
-                         "generation": execution["generation"], "exit_reason": exit_reason})
+            return self._finish_execution_in_tx(conn, execution_id, status, exit_reason, meta)
+
+    def _finish_execution_in_tx(self, conn, execution_id, status, exit_reason, meta=None):
+        now = _now()
+        execution = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
+        if execution is None:
+            raise CoordinatorError(f"unknown execution: {execution_id}")
+        if execution["status"] != "running":
+            raise CoordinatorError(f"execution is not running: {execution['status']}")
+        conn.execute(
+            "UPDATE executions SET status=?, ended_at=?, exit_reason=?, meta=? WHERE id=?",
+            (status, now, exit_reason,
+             json.dumps(meta if meta is not None else _json_load(execution["meta"], {}), ensure_ascii=False),
+             execution_id),
+        )
+        target = {
+            "succeeded": "auto_review",
+            "failed": "needs_fix",
+            "cancelled": "cancelled",
+            "interrupted": "needs_fix",
+        }[status]
+        self._transition_in_tx(conn, execution["task_id"], target, f"execution_{status}")
+        self._event(conn, "execution_finished", execution["task_id"], execution["agent"],
+                    {"execution_id": execution_id, "status": status,
+                     "generation": execution["generation"], "exit_reason": exit_reason})
+        row = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
+        return self._execution(row)
+
+    def recovery_report(self, project_id=None):
+        return recovery.report(self, project_id)
+
+    def reconcile_execution(self, execution_id, generation, reason, *, confirm_local_stopped=False):
+        if type(generation) is not int or generation <= 0:
+            raise CoordinatorError("execution generation must be a positive integer")
+        if not isinstance(reason, str) or not reason.strip():
+            raise CoordinatorError("reconciliation requires a reason and workspace inspection")
+        with self._tx() as conn:
             row = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
-            return self._execution(row)
+            if row is None or row["status"] != "running":
+                raise CoordinatorError("execution is no longer running")
+            latest = conn.execute("SELECT MAX(generation) FROM executions WHERE task_id=?", (row["task_id"],)).fetchone()[0]
+            if row["role"] != "author" or generation != row["generation"] or generation != latest:
+                raise CoordinatorError("execution generation changed; refresh before reconciliation")
+            task = conn.execute("SELECT status FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
+            if task["status"] in ("done", "cancelled"):
+                raise CoordinatorError("task is already closed; preserve its outcome")
+            execution = self._execution(row)
+            local = recovery.inspect_execution(execution, Path(self.db_path).resolve().parent / "request-receipts")
+            if local == "running" or (local != "stopped" and confirm_local_stopped is not True):
+                raise CoordinatorError("local execution is running or unconfirmed; inspect before reconciliation")
+            meta = {**execution["meta"], "reconciliation": {"local_state": local,
+                    "manual_confirmation": local != "stopped", "reason": reason, "at": _iso(_now())}}
+            return self._finish_execution_in_tx(conn, execution_id, "interrupted", reason, meta)
+
+    def reconcile_merge(self, attempt_id, action, result_sha="", reason=""):
+        attempt = next((a for a in self.list_merge_attempts() if a["attempt_id"] == attempt_id), None)
+        if attempt is None or attempt["git_result_sha"] != result_sha or not result_sha:
+            raise CoordinatorError("prepared merge receipt changed; refresh before reconciliation")
+        if action == "confirm":
+            return self.finish_merge(attempt_id, "succeeded", result_sha, require_published=True)
+        if action == "abandon" and reason.strip():
+            return self.finish_merge(attempt_id, "failed", "", reason)
+        raise CoordinatorError("invalid merge reconciliation action or missing reason")
 
     def get_execution(self, execution_id: str) -> dict:
         with self._conn() as conn:
@@ -2830,10 +2870,11 @@ class Coordinator:
             return self._merge_attempt(row)
 
     def finish_merge(
-        self, attempt_id: str, status: str = "succeeded", result_sha: str = "", error: str = ""
+        self, attempt_id: str, status: str = "succeeded", result_sha: str = "", error: str = "",
+        *, require_published: bool = False
     ) -> dict:
         try:
-            return self._finish_merge(attempt_id, status, result_sha, error)
+            return self._finish_merge(attempt_id, status, result_sha, error, require_published=require_published)
         except Exception as exc:
             # Git may have advanced even if the following SQLite transaction failed.
             # The prepared receipt survives; do not describe this as "nothing happened".
@@ -2856,6 +2897,7 @@ class Coordinator:
         status: str = "succeeded",
         result_sha: str = "",
         error: str = "",
+        *, require_published: bool = False,
     ) -> dict:
         if status not in ("succeeded", "failed", "unknown"):
             raise CoordinatorError(f"invalid merge status: {status}")
@@ -2887,6 +2929,8 @@ class Coordinator:
                     raise CoordinatorError("candidate SHA no longer matches publication receipt")
                 if not gate["ok"]:
                     raise CoordinatorError(self._gate_error(gate))
+                if require_published and actual != result_sha:
+                    raise CoordinatorError("target is not the published result; recovery will not publish it")
                 if actual != result_sha:
                     self._git(attempt["result_repo_path"] or attempt["repo_path"], "push",
                               "--receive-pack=git -c receive.denyCurrentBranch=updateInstead receive-pack",

@@ -90,3 +90,37 @@ test('an unconfirmed merge result cannot display a success notice', async () => 
   await assert.rejects(vm.runInContext("mergeCandidate('C')", r.context), /fixture conflict/);
   assert.doesNotMatch(r.elements.get('notice').textContent, /已合入/);
 });
+
+test('recovery renders unknown executions without claiming local cancellation or completion', async () => {
+  const r = await renderer();
+  vm.runInContext("state.recovery={executions:[{execution_id:'E-old',task_id:'T',generation:1,local_state:'unknown',manual_confirmation_allowed:true,workspace_changes:['<unsafe>']}],merges:[]};renderRecovery()", r.context);
+  const html = r.elements.get('recoveryRows').innerHTML;
+  assert.match(html, /手工确认/);
+  assert.match(html, /&lt;unsafe&gt;/);
+  assert.doesNotMatch(html, /已取消|已完成/);
+});
+
+test('unknown execution needs explicit confirmation and transmits its exact generation', async () => {
+  const r = await renderer();
+  vm.runInContext("state.recovery={executions:[{execution_id:'E',generation:7,local_state:'unknown',manual_confirmation_allowed:true}],merges:[]}", r.context);
+  let payload;
+  r.window.guild.rpc = (command, data) => {
+    if (command === 'reconcile_execution') payload = data;
+    return Promise.resolve(command === 'reconcile_execution' ? { status: 'interrupted' } : []);
+  };
+  r.elements.set('recovery-reason-E', { value: 'workspace checked' });
+  r.elements.set('recovery-confirm-E', { checked: false });
+  await assert.rejects(vm.runInContext("reconcileExecution('E')", r.context), /确认/);
+  assert.equal(payload, undefined);
+  r.elements.get('recovery-confirm-E').checked = true;
+  await vm.runInContext("reconcileExecution('E')", r.context);
+  assert.equal(payload.generation, 7);
+  assert.equal(payload.confirmLocalStopped, true);
+});
+
+test('merge recovery cannot claim success for an unconfirmed backend result', async () => {
+  const r = await renderer();
+  vm.runInContext("state.recovery={executions:[],merges:[{attempt_id:'M',git_result_sha:'sha',can_confirm:true}]}", r.context);
+  r.window.guild.rpc = command => Promise.resolve(command === 'reconcile_merge' ? { status: 'unknown' } : []);
+  await assert.rejects(vm.runInContext("reconcileMerge('M','confirm')", r.context), /尚未确认/);
+});

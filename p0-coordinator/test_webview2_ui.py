@@ -20,6 +20,8 @@ class WebViewUiTest(unittest.TestCase):
         cls.root = Path(cls.temp.name)
         cls.bin = cls.root / 'webview2/bin'
         cls.bin.mkdir(parents=True)
+        for module in ROOT.glob('*.py'):
+            shutil.copy2(module, cls.root / module.name)
         renderer = cls.root / 'electron/renderer'
         shutil.copytree(ROOT / 'electron/renderer', renderer)
         for dll in (ROOT / 'webview2/bin').glob('*.dll'):
@@ -71,6 +73,37 @@ else { System.Threading.Thread.Sleep(1500); Console.WriteLine("[]"); }
         self.assertEqual(result.returncode, 1)
         self.assertFalse(row['smoke'])
         self.assertIn('serialized', row['error'])
+
+    def controlled_db(self, name):
+        from coordinator import Coordinator
+        coord = Coordinator(self.root / (name + '.sqlite'))
+        project = coord.create_project('offline native recovery')
+        task = coord.create_task(project['project_id'], 'legacy interrupted worker', ['a.txt'])
+        ex = coord.start_execution(task['id'], 'controlled')
+        return coord, ex
+
+    def test_recovery_panel_renders_real_database_in_hidden_webview(self):
+        coord, ex = self.controlled_db('window-recovery')
+        result = subprocess.run([str(self.shell), '--smoke-recovery'], capture_output=True, encoding='utf-8', timeout=40,
+                                env={**os.environ, 'PYTHON': sys.executable, 'GUILD_DB': coord.db_path})
+        rows = [json.loads(line.split('WEBVIEW2_SMOKE ', 1)[1]) for line in result.stdout.splitlines() if 'WEBVIEW2_SMOKE ' in line]
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(rows[0]['smoke'])
+        self.assertEqual(rows[0]['data']['executions'][0]['execution_id'], ex['execution_id'])
+        self.assertEqual(coord.get_execution(ex['execution_id'])['status'], 'running')
+
+    def test_native_cli_requires_explicit_confirmation_for_legacy_execution(self):
+        coord, ex = self.controlled_db('native-reconcile')
+        command = [str(self.shell), '--call', 'reconcile_execution', '--execution', ex['execution_id'],
+                   '--generation', str(ex['generation']), '--reason', 'offline manual process and workspace inspection']
+        env = {**os.environ, 'PYTHON': sys.executable, 'GUILD_DB': coord.db_path}
+        denied = subprocess.run(command, capture_output=True, encoding='utf-8', timeout=20, env=env)
+        self.assertEqual(denied.returncode, 1, denied.stdout)
+        self.assertEqual(coord.get_execution(ex['execution_id'])['status'], 'running')
+        accepted = subprocess.run(command + ['--confirm-local-stopped'], capture_output=True, encoding='utf-8', timeout=20, env=env)
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertEqual(json.loads(accepted.stdout)['status'], 'interrupted')
+        self.assertEqual(coord.get_task(ex['task_id'])['lifecycle'], 'needs_fix')
 
 
 if __name__ == '__main__':
