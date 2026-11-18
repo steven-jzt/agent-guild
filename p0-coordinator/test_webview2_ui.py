@@ -105,6 +105,31 @@ else { System.Threading.Thread.Sleep(1500); Console.WriteLine("[]"); }
         self.assertEqual(json.loads(accepted.stdout)['status'], 'interrupted')
         self.assertEqual(coord.get_task(ex['task_id'])['lifecycle'], 'needs_fix')
 
+    def test_review_button_reports_and_cancel_in_real_hidden_webview(self):
+        from test_agent_review import AgentReviewTest
+        for scenario in ('pass', 'defect', 'timeout'):
+            with self.subTest(scenario=scenario):
+                fixture = AgentReviewTest()
+                fixture.setUp()
+                try:
+                    fixture.register()
+                    result = subprocess.run([str(self.shell), '--smoke-review'], capture_output=True,
+                        encoding='utf-8', timeout=55, env={**os.environ, 'PYTHON': sys.executable,
+                        'GUILD_DB': fixture.c.db_path, 'GUILD_REVIEW_OFFLINE_SCENARIO': scenario})
+                    rows = [json.loads(line.split('WEBVIEW2_SMOKE ', 1)[1]) for line in result.stdout.splitlines()
+                            if 'WEBVIEW2_SMOKE ' in line]
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue(rows[0]['smoke'])
+                    self.assertEqual(fixture.c.get_execution(fixture.author['execution_id'])['status'], 'succeeded')
+                    if scenario == 'timeout':
+                        self.assertTrue(rows[0]['interrupted'])
+                        self.assertFalse(fixture.c.evaluate_candidate_gate(fixture.cid)['ok'])
+                    else:
+                        self.assertEqual(rows[0]['data']['reviews'][-1]['decision'],
+                                         'pass' if scenario == 'pass' else 'request_changes')
+                finally:
+                    fixture.tearDown()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

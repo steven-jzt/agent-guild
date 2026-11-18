@@ -26,6 +26,7 @@ from typing import Any, Iterable
 import semantic
 import managed_workspace
 import recovery
+import review_store
 
 DEFAULT_TTL = 120.0
 APPROVER_ROLE_RANK = {"reviewer": 1, "admin": 2}
@@ -462,7 +463,7 @@ class Coordinator:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._migration_conn() as conn:
             # executescript() 会隐式提交并结束未完成事务，必须在 BEGIN 之前调用。
-            conn.executescript(SCHEMA)
+            conn.executescript(SCHEMA + review_store.SCHEMA)
             conn.execute("BEGIN IMMEDIATE")
             cols = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "kind" not in cols:
@@ -1581,9 +1582,11 @@ class Coordinator:
                 raise CoordinatorError(
                     "file reservation conflict: " + json.dumps(conflicts, ensure_ascii=False)
                 )
+            if role == "reviewer":
+                raise CoordinatorError("use review-candidate to create a bound reviewer execution")
             if role == "author":
                 active = conn.execute(
-                    "SELECT id FROM executions WHERE task_id=? AND role='author' AND status='running'",
+                    "SELECT id FROM executions WHERE task_id=? AND role IN ('author','reviewer') AND status='running'",
                     (task_id,),
                 ).fetchone()
                 if active is not None:
@@ -1637,12 +1640,26 @@ class Coordinator:
             "cancelled": "cancelled",
             "interrupted": "needs_fix",
         }[status]
-        self._transition_in_tx(conn, execution["task_id"], target, f"execution_{status}")
+        if execution["role"] == "reviewer":
+            review_store.interrupt(self, conn, execution, exit_reason)
+        else:
+            self._transition_in_tx(conn, execution["task_id"], target, f"execution_{status}")
         self._event(conn, "execution_finished", execution["task_id"], execution["agent"],
                     {"execution_id": execution_id, "status": status,
                      "generation": execution["generation"], "exit_reason": exit_reason})
         row = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
         return self._execution(row)
+
+    def _candidate_repo_path_for_review(self, candidate_id):
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
+            return self._candidate_repo_path(conn, row)
+
+    def begin_candidate_review(self, candidate_id, check_id="agent-review", *, simulated=False, owner=None):
+        return review_store.begin(self, candidate_id, check_id, simulated, owner)
+
+    def list_reviews(self, candidate_id=None):
+        return review_store.list_runs(self, candidate_id)
 
     def recovery_report(self, project_id=None):
         return recovery.report(self, project_id)
@@ -1657,7 +1674,7 @@ class Coordinator:
             if row is None or row["status"] != "running":
                 raise CoordinatorError("execution is no longer running")
             latest = conn.execute("SELECT MAX(generation) FROM executions WHERE task_id=?", (row["task_id"],)).fetchone()[0]
-            if row["role"] != "author" or generation != row["generation"] or generation != latest:
+            if row["role"] not in ("author", "reviewer") or generation != row["generation"] or generation != latest:
                 raise CoordinatorError("execution generation changed; refresh before reconciliation")
             task = conn.execute("SELECT status FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
             if task["status"] in ("done", "cancelled"):
@@ -2030,86 +2047,99 @@ class Coordinator:
         batch_id: str | None = None,
         status: str = "valid",
     ) -> dict:
-        """记录证据。
+        with self._tx() as conn:
+            return self._record_evidence_in_tx(conn, candidate_id, type, command, cwd, exit_code,
+                                               output_ref, sha, execution_id, check_id, batch_id, status)
 
-        - 带 check_id 的证据属于门禁证据：必须绑定当前 candidate SHA，并落在打开的验证批次；
-        - 不带 check_id 的证据只作记录，不能替代必需检查；
-        - status='void' 表示该条结果作废，不参与门禁。
-        """
+    def _record_evidence_in_tx(
+        self,
+        conn,
+        candidate_id: str,
+        type: str,
+        command: str = "",
+        cwd: str = "",
+        exit_code: int | None = None,
+        output_ref: str = "",
+        sha: str | None = None,
+        execution_id: str | None = None,
+        check_id: str = "",
+        batch_id: str | None = None,
+        status: str = "valid",
+    ) -> dict:
         if status not in ("valid", "void"):
             raise CoordinatorError(f"invalid evidence status: {status}")
         check_id = (check_id or "").strip()
         if batch_id and not check_id:
             raise CoordinatorError("batch_id requires check_id")
         now = _now()
-        with self._tx() as conn:
-            candidate = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
-            if candidate is None:
-                raise CoordinatorError(f"unknown candidate: {candidate_id}")
-            if candidate["status"] in ("approved", "merged", "rejected", "invalidated"):
-                raise CoordinatorError(f"candidate is already {candidate['status']}")
-            if execution_id:
-                execution = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
-                if execution is None:
-                    raise CoordinatorError(f"unknown execution: {execution_id}")
-            batch = None
-            seq = None
-            if check_id:
-                required = self._required_checks_for_task(conn, candidate["task_id"])
-                required_item = next(
-                    (item for item in required if item["id"] == check_id), None
-                )
-                if required_item is not None and type != required_item["kind"]:
-                    # 类别规范：证据类别必须与检查项 kind 一致，普通测试不能冒充审查。
-                    raise CoordinatorError(
-                        "evidence type does not match required check kind: "
-                        f"{type} != {required_item['kind']} ({check_id})"
-                    )
-                if not sha:
-                    raise CoordinatorError("evidence for a check must bind candidate SHA")
-                if sha != candidate["candidate_sha"]:
-                    raise CoordinatorError(
-                        "evidence SHA does not match candidate SHA: "
-                        f"{sha} != {candidate['candidate_sha']}"
-                    )
-                if batch_id:
-                    batch = conn.execute(
-                        "SELECT * FROM validation_batches WHERE id=? AND candidate_id=?",
-                        (batch_id, candidate_id),
-                    ).fetchone()
-                    if batch is None:
-                        raise CoordinatorError(f"unknown validation batch for candidate: {batch_id}")
-                    if batch["status"] != "open":
-                        raise CoordinatorError(f"validation batch is not open: {batch['status']}")
-                else:
-                    batch = self._active_batch_row(conn, candidate)
-                    if batch is None:
-                        raise CoordinatorError(
-                            "candidate has no active validation batch; call begin_validation_batch"
-                        )
-                if batch["candidate_sha"] != candidate["candidate_sha"]:
-                    raise CoordinatorError("validation batch belongs to another candidate SHA")
-                seq = int(batch["next_seq"]) + 1
-                conn.execute(
-                    "UPDATE validation_batches SET next_seq=? WHERE id=?", (seq, batch["id"])
-                )
-            evidence_id = "EV-" + uuid.uuid4().hex[:8]
-            conn.execute(
-                "INSERT INTO evidence(id, candidate_id, execution_id, check_id, batch_id, seq, "
-                "type, command, cwd, exit_code, output_ref, sha, status, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (evidence_id, candidate_id, execution_id, check_id,
-                 batch["id"] if batch is not None else None, seq, type, command, cwd,
-                 exit_code, output_ref, sha, status, now),
+        candidate = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
+        if candidate is None:
+            raise CoordinatorError(f"unknown candidate: {candidate_id}")
+        if candidate["status"] in ("approved", "merged", "rejected", "invalidated"):
+            raise CoordinatorError(f"candidate is already {candidate['status']}")
+        if execution_id:
+            execution = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
+            if execution is None:
+                raise CoordinatorError(f"unknown execution: {execution_id}")
+        batch = None
+        seq = None
+        if check_id:
+            required = self._required_checks_for_task(conn, candidate["task_id"])
+            required_item = next(
+                (item for item in required if item["id"] == check_id), None
             )
-            self._event(conn, "evidence_recorded", candidate["task_id"], "system",
-                        {"evidence_id": evidence_id, "candidate_id": candidate_id,
-                         "check_id": check_id,
-                         "batch_id": batch["id"] if batch is not None else None,
-                         "seq": seq, "type": type, "exit_code": exit_code,
-                         "sha": sha, "status": status})
-            row = conn.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
-            return self._evidence(row)
+            if required_item is not None and type != required_item["kind"]:
+                # 类别规范：证据类别必须与检查项 kind 一致，普通测试不能冒充审查。
+                raise CoordinatorError(
+                    "evidence type does not match required check kind: "
+                    f"{type} != {required_item['kind']} ({check_id})"
+                )
+            if not sha:
+                raise CoordinatorError("evidence for a check must bind candidate SHA")
+            if sha != candidate["candidate_sha"]:
+                raise CoordinatorError(
+                    "evidence SHA does not match candidate SHA: "
+                    f"{sha} != {candidate['candidate_sha']}"
+                )
+            if batch_id:
+                batch = conn.execute(
+                    "SELECT * FROM validation_batches WHERE id=? AND candidate_id=?",
+                    (batch_id, candidate_id),
+                ).fetchone()
+                if batch is None:
+                    raise CoordinatorError(f"unknown validation batch for candidate: {batch_id}")
+                if batch["status"] != "open":
+                    raise CoordinatorError(f"validation batch is not open: {batch['status']}")
+            else:
+                batch = self._active_batch_row(conn, candidate)
+                if batch is None:
+                    raise CoordinatorError(
+                        "candidate has no active validation batch; call begin_validation_batch"
+                    )
+            if batch["candidate_sha"] != candidate["candidate_sha"]:
+                raise CoordinatorError("validation batch belongs to another candidate SHA")
+            seq = int(batch["next_seq"]) + 1
+            conn.execute(
+                "UPDATE validation_batches SET next_seq=? WHERE id=?", (seq, batch["id"])
+            )
+        evidence_id = "EV-" + uuid.uuid4().hex[:8]
+        conn.execute(
+            "INSERT INTO evidence(id, candidate_id, execution_id, check_id, batch_id, seq, "
+            "type, command, cwd, exit_code, output_ref, sha, status, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (evidence_id, candidate_id, execution_id, check_id,
+             batch["id"] if batch is not None else None, seq, type, command, cwd,
+             exit_code, output_ref, sha, status, now),
+        )
+        self._event(conn, "evidence_recorded", candidate["task_id"], "system",
+                    {"evidence_id": evidence_id, "candidate_id": candidate_id,
+                     "check_id": check_id,
+                     "batch_id": batch["id"] if batch is not None else None,
+                     "seq": seq, "type": type, "exit_code": exit_code,
+                     "sha": sha, "status": status})
+        row = conn.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
+        return self._evidence(row)
+
 
     def list_evidence(self, candidate_id: str) -> list[dict]:
         with self._conn() as conn:
@@ -2565,6 +2595,12 @@ class Coordinator:
                     result["failed"].append(item["id"])
                 else:
                     entry["status"] = "passed"
+            if item["kind"] == "review":
+                review_reason = review_store.gate_reason(self, conn, candidate, batch, item, row)
+                if review_reason:
+                    entry["status"] = "invalid_review"
+                    entry["reason"] = review_reason
+                    result["invalid"].append(item["id"])
             result["items"].append(entry)
 
         result["ok"] = (

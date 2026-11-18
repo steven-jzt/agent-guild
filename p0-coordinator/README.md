@@ -1,5 +1,7 @@
 # p0-coordinator：多 agent 协调内核（P0 + P1/P2 初步）
 
+最新增量：[P2-3 手动审查与离线验收](../docs/releases/2026-11-13-p2-3-agent-review.md)。CLI `review-candidate` / MCP `review_candidate` 在独立只读副本中审查；`reviews` / `list_reviews` 查看报告。人工批准和合入仍独立。真实模型未验收，模拟证据只用于隔离测试项目。
+
 SQLite + MCP + CLI 的协调器：任务卡、写集、依赖、原子 claim、TTL 租约、fencing token、事件日志；外加 runs 遥测、估计器、MILP 2D/3D Pareto、独立验证、N-of-M 审批（TTL）、预算止损、计划回写/预留。
 
 协调器纯 Python 标准库；MILP 计划器用 PuLP/CBC（本机已装）；Worktree 功能需要 Git 2.30+。不依赖网络。

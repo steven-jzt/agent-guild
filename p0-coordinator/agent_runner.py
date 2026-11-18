@@ -187,9 +187,11 @@ def run_agent(
         out["check_exit"] = check_exit
         out["check_output"] = check_output
         out["check_error"] = check_error
-        if check_exit == 0:
+        if check_exit == 0 and coord.evaluate_candidate_gate(cand["candidate_id"])["ok"]:
             coord.mark_candidate_ready(cand["candidate_id"])
             out["candidate_status"] = coord.get_candidate(cand["candidate_id"])["status"]
         else:
             out["candidate_status"] = "validating"
+            if check_exit == 0:
+                out["message"] = "代码执行及测试已完成，等待审查或其他必需检查"
     return out

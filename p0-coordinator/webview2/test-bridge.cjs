@@ -61,6 +61,32 @@ async function renderer() {
   return { context, elements, window };
 }
 
+test('candidate report escapes findings and blocks approval during review', async () => {
+  const r = await renderer();
+  vm.runInContext(`state.candidates=[{candidate_id:'C',task_id:'T',status:'awaiting_human',
+    reviewState:{gate:{ok:false,checks:[]},reviews:[{status:'running',simulated:true,
+      report:{findings:[{severity:'P2',path:'a.py',line:2,message:'<script>bad</script>'}]}}]}}];renderCandidates()`, r.context);
+  const html = r.elements.get('candidateCards').innerHTML;
+  assert.match(html, /审查中/);
+  assert.match(html, /离线模拟/);
+  assert.match(html, /a.py:2/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.doesNotMatch(html, /data-action="approve"/);
+});
+
+test('frozen candidate exposes manual review action', async () => {
+  const r = await renderer();
+  vm.runInContext("state.candidates=[{candidate_id:'C',task_id:'T',status:'validating',reviewState:{gate:{ok:false,checks:[]},reviews:[]}}];renderCandidates()", r.context);
+  assert.match(r.elements.get('candidateCards').innerHTML, /data-action="review"/);
+});
+
+test('stopped reviewer displays pending reconciliation instead of ongoing review', async () => {
+  const r = await renderer();
+  vm.runInContext("state.recovery={executions:[{execution_id:'E',role:'reviewer',local_state:'stopped'}],merges:[]};state.candidates=[{candidate_id:'C',status:'validating',reviewState:{reviews:[{execution_id:'E',status:'running',report:{}}]}}];renderCandidates()", r.context);
+  assert.match(r.elements.get('candidateCards').innerHTML, /已停止，待核对收尾/);
+  assert.doesNotMatch(r.elements.get('candidateCards').innerHTML, /审查中/);
+});
+
 test('refresh preserves pending operations and prevents duplicate submission until termination', async () => {
   const r = await renderer();
   let reject, calls = 0, cancellations = 0;

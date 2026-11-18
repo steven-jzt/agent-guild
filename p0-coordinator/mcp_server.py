@@ -717,6 +717,12 @@ TOOLS = [
 ]
 
 TOOLS.extend([
+    {"name": "review_candidate", "description": "手动审查冻结候选，独立只读运行；不批准或合入。",
+     "inputSchema": {"type": "object", "properties": {"candidate_id": {"type": "string"},
+        "check_id": {"type": "string", "default": "agent-review"},
+        "timeout": {"type": "number", "exclusiveMinimum": 0, "maximum": 1800}}, "required": ["candidate_id"]}},
+    {"name": "list_reviews", "description": "只读查看候选审查报告。",
+     "inputSchema": {"type": "object", "properties": {"candidate_id": {"type": "string"}}, "required": ["candidate_id"]}},
     {"name": "recovery_report", "description": "只读核对未结束执行和合入，不自动重跑。",
      "inputSchema": {"type": "object", "properties": {"project_id": {"type": "string"}}}},
     {"name": "reconcile_execution", "description": "核对本地进程与工作区后结束遗留执行；旧记录需显式确认。",
@@ -736,6 +742,11 @@ def send(payload: dict) -> None:
 
 
 def call_tool(c: Coordinator, name: str, args: dict[str, Any]) -> Any:
+    if name == "review_candidate":
+        from agent_review import review_candidate
+        return review_candidate(c, args["candidate_id"], args.get("check_id", "agent-review"), args.get("timeout", 180))
+    if name == "list_reviews":
+        return c.list_reviews(args["candidate_id"])
     if name in ("plan_milp", "plan_front", "plan_front_3d"):
         try:
             from plan_milp import pareto_front, pareto_front_3d, solve_plan
