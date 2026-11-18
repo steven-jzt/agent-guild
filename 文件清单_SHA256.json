@@ -3,8 +3,8 @@
   "generatedAt": "2026-11-13",
   "timezone": "Asia/Shanghai",
   "algorithm": "SHA-256",
-  "fileCount": 276,
-  "totalBytes": 4417193,
+  "fileCount": 280,
+  "totalBytes": 4451209,
   "note": "不包含自身；路径相对仓库根目录；按 Git 归档内容（Git 规范化字节）计算；Windows 归档需 core.autocrlf=false；排除未跟踪运行时产物。",
   "files": [
     {
@@ -201,6 +201,26 @@
       "path": "docs/releases/2026-11-13-p2-3-agent-review.md",
       "bytes": 8243,
       "sha256": "38a975168c7864d0a989f827a41aa26d1f9846dddd57a865932758890f6611d3"
+    },
+    {
+      "path": "docs/交接规范/00_项目交接文档规范_v1.0.md",
+      "bytes": 7946,
+      "sha256": "82a812d880afa058abf4c21cbcc742806efc3f34c0ea2a71223f8695a68a9f39"
+    },
+    {
+      "path": "docs/交接规范/01_当前总览模板.md",
+      "bytes": 4676,
+      "sha256": "de747b800baedd156452f944bf32e134b3858f9a4ea2181a2a1aa9fde89cccb8"
+    },
+    {
+      "path": "docs/交接规范/02_每轮交付模板.md",
+      "bytes": 5286,
+      "sha256": "3e2096ef48f4fa7d62f4634a75204761dd62de5eb57605f94a65b04d8f0d6810"
+    },
+    {
+      "path": "docs/交接规范/03_AgentGuild示例.md",
+      "bytes": 16108,
+      "sha256": "c7bb6dd54e9285fa0742b28b2f5f92fc2aba77b3c3fca05fa35ac3757fed7db5"
     },
     {
       "path": "docs/归档/交接包_交付验证摘要.json",
